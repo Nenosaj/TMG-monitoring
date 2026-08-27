@@ -1,0 +1,19 @@
+# Node
+node_modules/
+
+# Environment — contains credentials, never commit
+server/.env
+
+# SQLite database files — these are runtime data, not source
+server/data/*.sqlite3
+server/data/*.sqlite3-wal
+server/data/*.sqlite3-shm
+server/data/*.db
+server/data/*.db-wal
+server/data/*.db-shm
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+*.log
