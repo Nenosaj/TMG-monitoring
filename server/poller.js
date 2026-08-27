@@ -1,4 +1,4 @@
-﻿const db = require("./db");
+const db = require("./db");
 
 function nowTs() {
   return Math.floor(Date.now() / 1000);
@@ -90,6 +90,17 @@ function startPoller({ client, vlan = 70, intervalSeconds = 30, retentionDays = 
             let topApp = null;
             let hostDuration = (h.last_seen && h.first_seen) ? (h.last_seen - h.first_seen) : 0;
             
+            // Extract host-level sent/rcvd — ntopng uses h.bytes.recvd (not rcvd/received)
+            const bytesSent  = h.bytes?.sent  ?? 0;
+            const bytesRcvd  = h.bytes?.recvd ?? h.bytes?.received ?? h.bytes?.rcvd ?? 0;
+            const bytesTotal = h.bytes?.total ?? (bytesSent + bytesRcvd);
+
+            // Compute directional ratio for per-app approximation
+            // (ntopng L7 stats only return total bytes per protocol, no directional breakdown)
+            const totalForRatio = bytesSent + bytesRcvd || 1;
+            const sentRatio = bytesSent / totalForRatio;
+            const rcvdRatio = bytesRcvd / totalForRatio;
+
             try {
               const l7 = await client.getHostL7Stats(h.ip);
               if (Array.isArray(l7) && l7.length > 0) {
@@ -102,16 +113,22 @@ function startPoller({ client, vlan = 70, intervalSeconds = 30, retentionDays = 
                 }
 
                 for (const app of l7) {
-                  const appName = app.label || app.name || "Unknown";
-                  if (appName === "Other" && (app.value ?? 0) === 0) continue;
+                  const appName  = app.label || app.name || "Unknown";
+                  const appTotal = app.value ?? 0;
+                  if (appName === "Other" && appTotal === 0) continue;
+
+                  // Use actual sent/rcvd if the API provides them; otherwise approximate
+                  const appSent = app.sent != null ? app.sent : Math.round(appTotal * sentRatio);
+                  const appRcvd = app.rcvd != null ? app.rcvd : Math.round(appTotal * rcvdRatio);
+
                   hostAppRows.push({
                     ts,
                     ip: h.ip,
                     vlan: Number(h.vlan ?? vlan),
                     app_name: appName,
-                    bytes: app.value ?? (app.sent + app.rcvd) ?? 0,
-                    bytes_sent: app.sent ?? 0,
-                    bytes_rcvd: app.rcvd ?? 0,
+                    bytes: appTotal,
+                    bytes_sent: appSent,
+                    bytes_rcvd: appRcvd,
                     flows: app.count ?? 0,
                     duration_sec: app.duration ?? hostDuration,
                   });
@@ -120,10 +137,6 @@ function startPoller({ client, vlan = 70, intervalSeconds = 30, retentionDays = 
             } catch (e) {
               // Ignore individual host L7 errors
             }
-
-            const bytesSent = h.bytes?.sent ?? 0;
-            const bytesRcvd = h.bytes?.received ?? h.bytes?.rcvd ?? 0;
-            const bytesTotal = h.bytes?.total ?? (bytesSent + bytesRcvd);
             const bps = h.thpt?.bps ?? h.throughput_bps ?? 0;
             const pps = h.thpt?.pps ?? h.throughput_pps ?? 0;
             const numFlows = h.num_flows?.total ?? h.num_flows ?? 0;
