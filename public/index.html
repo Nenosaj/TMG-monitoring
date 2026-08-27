@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TMG — VLAN 70 Network Monitor</title>
+<script src="vendor/chart.umd.js"></script>
+<link rel="stylesheet" href="styles.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<!-- Network health bar (top edge color indicator) -->
+<div id="networkHealthBar" style="height:3px;background:linear-gradient(90deg,#10b981,#06b6d4);width:100%;position:fixed;top:0;left:0;z-index:50;transition:background 1s ease;"></div>
+
+<!-- Header -->
+<header class="topbar" style="top:3px">
+  <div class="topbar__left">
+    <div class="brand">
+      <div class="brand__logo">
+        <span class="pulse-ring"></span>
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 11a9 9 0 0 1 9 9"></path>
+          <path d="M4 4a16 16 0 0 1 16 16"></path>
+          <circle cx="5" cy="19" r="1"></circle>
+        </svg>
+      </div>
+      <div>
+        <div class="brand__title">TMG Monitor <span class="badge badge--vlan">VLAN 70 · 192.168.70.0/24</span></div>
+        <p id="statusLine" class="topbar__status">Connecting to monitor server…</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="topbar__center">
+    <div class="range-selector" id="globalRangeToggle">
+      <button data-hours="1"   class="range-btn">1h</button>
+      <button data-hours="6"   class="range-btn">6h</button>
+      <button data-hours="24"  class="range-btn active">24h</button>
+      <button data-hours="168" class="range-btn">7d</button>
+      <button data-hours="720" class="range-btn">30d</button>
+    </div>
+  </div>
+
+  <div class="topbar__right">
+    <div id="lastPollBadge" class="last-poll-badge">Awaiting poll…</div>
+    <div id="liveClock" class="clock-display">—</div>
+    <button id="refreshBtn" class="action-btn" title="Refresh Now">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" id="refreshIcon">
+        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+      </svg>
+      <span>Sync</span>
+    </button>
+    <div class="status-indicator">
+      <span class="live-pulse" id="liveDot"></span>
+      <span id="liveText">LIVE</span>
+    </div>
+  </div>
+</header>
+
+<!-- Main Container -->
+<div class="app-container">
+
+  <!-- KPI Metrics Banner — 6 cards -->
+  <section class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-card__header">
+        <span class="kpi-title">Download</span>
+        <span class="kpi-icon kpi-icon--down">↓</span>
+      </div>
+      <div class="kpi-value" id="kpiDown">—</div>
+      <div class="kpi-sub" id="kpiDownSub">Peak: —</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-card__header">
+        <span class="kpi-title">Upload</span>
+        <span class="kpi-icon kpi-icon--up">↑</span>
+      </div>
+      <div class="kpi-value" id="kpiUp">—</div>
+      <div class="kpi-sub" id="kpiUpSub">Peak: —</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-card__header">
+        <span class="kpi-title">Total VLAN Bandwidth</span>
+        <span class="kpi-icon" style="background:rgba(139,92,246,0.12);color:#8b5cf6">∑</span>
+      </div>
+      <div class="kpi-value" id="kpiTotalBw">—</div>
+      <div class="kpi-sub" id="kpiTotalBwSub">Across all hosts</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-card__header">
+        <span class="kpi-title">Active / Total Devices</span>
+        <span class="kpi-icon kpi-icon--devices">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+        </span>
+      </div>
+      <div class="kpi-value" id="kpiHosts">—</div>
+      <div class="kpi-sub" id="kpiHostsSub">In selected timeframe</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-card__header">
+        <span class="kpi-title">Top Dominant App</span>
+        <span class="kpi-icon kpi-icon--app">★</span>
+      </div>
+      <div class="kpi-value" id="kpiTopApp">—</div>
+      <div class="kpi-sub" id="kpiTopAppBytes">—</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-card__header">
+        <span class="kpi-title">App Engagement</span>
+        <span class="kpi-icon" style="background:rgba(16,185,129,0.12);color:#10b981">●</span>
+      </div>
+      <div class="kpi-value" id="kpiEngaged">—</div>
+      <div class="kpi-sub" id="kpiEngagedSub">apps actively receiving</div>
+    </div>
+  </section>
+
+  <!-- Device Activity Table -->
+  <section class="card card--main">
+    <div class="card__head">
+      <div>
+        <h2 class="card__title">VLAN 70 — Live Device Activity</h2>
+        <p class="card__subtitle">Real-time host status, session durations, app traffic, and engagement. <strong>Click any host to inspect full history.</strong></p>
+      </div>
+      <div class="table-controls">
+        <div class="search-box">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" id="hostSearch" placeholder="Search IP, name, MAC..." />
+        </div>
+        <select id="appFilter" class="select-box">
+          <option value="">All Applications</option>
+        </select>
+        <select id="sortBy" class="select-box">
+          <option value="bps">Sort: Highest Bandwidth</option>
+          <option value="bytes">Sort: Total Traffic</option>
+          <option value="duration">Sort: Longest Duration</option>
+          <option value="ip">Sort: IP Address</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="hosts-table" id="hostsTable">
+        <thead>
+          <tr>
+            <th style="width:6%">Status</th>
+            <th style="width:19%">IP & Host / MAC</th>
+            <th style="width:13%">Last Seen</th>
+            <th style="width:29%">Applications Accessed</th>
+            <th style="width:15%">Traffic ↓↑</th>
+            <th style="width:10%">Bandwidth</th>
+            <th style="width:8%">BW %</th>
+          </tr>
+        </thead>
+        <tbody id="hostsBody">
+          <tr><td colspan="7" class="empty-state">Loading VLAN 70 host data…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="table-footer">
+      <span id="hostsCountLabel">Showing 0 devices</span>
+      <span class="table-hint">💡 Click any row to inspect full app history</span>
+    </div>
+  </section>
+
+  <!-- Charts Row -->
+  <div class="charts-row">
+    <section class="card chart-card">
+      <div class="card__head">
+        <div>
+          <h2 class="card__title">VLAN 70 Bandwidth Timeline</h2>
+          <p class="card__subtitle" id="trafficChartSub">Download / upload throughput over time</p>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="throughputChart"></canvas>
+      </div>
+    </section>
+
+    <section class="card chart-card">
+      <div class="card__head">
+        <div>
+          <h2 class="card__title">Top Application Breakdown</h2>
+          <p class="card__subtitle">Aggregated nDPI protocol usage across VLAN</p>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="appsChart"></canvas>
+      </div>
+    </section>
+  </div>
+
+  <!-- Alerts Feed -->
+  <section class="card">
+    <div class="card__head">
+      <div>
+        <h2 class="card__title">Security & Traffic Alert Log</h2>
+        <p class="card__subtitle">Persistent log of events and threshold crossings</p>
+      </div>
+    </div>
+    <div class="alerts-container">
+      <ul class="alert-list" id="alertsList">
+        <li class="empty-state">No alerts recorded in this timeframe.</li>
+      </ul>
+    </div>
+  </section>
+
+</div>
+
+<!-- Host Deep Dive Slide-over Drawer -->
+<div class="drawer-overlay" id="hostDrawerOverlay">
+  <div class="drawer" id="hostDrawer">
+    <div class="drawer__header">
+      <div class="drawer__title-group">
+        <div class="host-pill" id="drawerIp">192.168.70.x</div>
+        <div>
+          <h3 id="drawerName" class="drawer__name">—</h3>
+          <span id="drawerMac" class="drawer__mac">MAC: —</span>
+        </div>
+      </div>
+      <button class="drawer__close" id="drawerCloseBtn" title="Close">✕</button>
+    </div>
+
+    <!-- Drawer Controls -->
+    <div class="drawer__controls">
+      <span class="drawer__section-label">Inspection Window:</span>
+      <div class="range-selector range-selector--sm" id="hostRangeToggle">
+        <button data-hours="24"  class="range-btn active">Last 24h</button>
+        <button data-hours="168" class="range-btn">Last 7 Days</button>
+        <button data-hours="720" class="range-btn">Last 30 Days</button>
+      </div>
+    </div>
+
+    <!-- 6-box Host Stats Summary -->
+    <div class="drawer__stats-grid">
+      <div class="drawer__stat-box">
+        <span class="drawer__stat-label">Duration</span>
+        <span class="drawer__stat-value" id="drawerDuration">—</span>
+      </div>
+      <div class="drawer__stat-box">
+        <span class="drawer__stat-label">Total Traffic</span>
+        <span class="drawer__stat-value" id="drawerTotalBytes">—</span>
+      </div>
+      <div class="drawer__stat-box drawer__sent-rcvd-box">
+        <span class="drawer__stat-label">Sent ↑</span>
+        <span class="drawer__stat-value drawer__stat-value--sent" id="drawerSent">—</span>
+      </div>
+      <div class="drawer__stat-box drawer__sent-rcvd-box">
+        <span class="drawer__stat-label">Received ↓</span>
+        <span class="drawer__stat-value drawer__stat-value--rcvd" id="drawerRcvd">—</span>
+      </div>
+      <div class="drawer__stat-box">
+        <span class="drawer__stat-label">Bandwidth</span>
+        <span class="drawer__stat-value" id="drawerBps">—</span>
+      </div>
+      <div class="drawer__stat-box">
+        <span class="drawer__stat-label">Apps Accessed</span>
+        <span class="drawer__stat-value" id="drawerAppCount">—</span>
+      </div>
+    </div>
+
+    <!-- Apps Section -->
+    <div class="drawer__body">
+      <div class="drawer__subhead">
+        <h4>Applications Accessed by this Host</h4>
+        <span class="badge" id="drawerTimeframeBadge">Past 24 Hours</span>
+      </div>
+
+      <div class="host-chart-wrap">
+        <canvas id="hostAppsChart"></canvas>
+      </div>
+
+      <div class="drawer__table-wrap">
+        <table class="drawer__table">
+          <thead>
+            <tr>
+              <th>Application</th>
+              <th>Duration</th>
+              <th>Sent ↑</th>
+              <th>Received ↓</th>
+              <th>Total</th>
+              <th>% Host</th>
+              <th>Flows</th>
+            </tr>
+          </thead>
+          <tbody id="drawerAppsBody">
+            <tr><td colspan="7" class="empty-state">Loading host apps…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="drawer__subhead" style="margin-top:20px">
+        <h4>Bandwidth Timeline</h4>
+      </div>
+      <div class="host-chart-wrap">
+        <canvas id="hostTimelineChart"></canvas>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <span>TMG Network Monitor · VLAN 70 · Powered by ntopng REST API v2 · Persistent local history</span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

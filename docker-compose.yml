@@ -1,0 +1,19 @@
+services:
+  vlan70-monitor:
+    build: .
+    container_name: vlan70-monitor
+    restart: unless-stopped
+    ports:
+      # Host:Container — change the host side if 4070 is taken, but avoid
+
+      - "4070:4070"
+    env_file:
+      - path: ./server/.env
+        required: false
+    volumes:
+      # Persists the local SQLite history log across container restarts/rebuilds.
+      - vlan70-data:/app/server/data
+    init: true
+
+volumes:
+  vlan70-data:
