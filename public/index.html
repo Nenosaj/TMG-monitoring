@@ -3,12 +3,101 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>TMG — VLAN 70 Network Monitor</title>
+<title>TMG — Network Monitor</title>
 <script src="vendor/chart.umd.js"></script>
 <link rel="stylesheet" href="styles.css" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ── VLAN Tab Switcher ────────────────────────────────────────────── */
+.vlan-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 16px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+.vlan-tabs::-webkit-scrollbar { display: none; }
+
+.vlan-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(30,48,61,0.8);
+  background: rgba(15,25,32,0.6);
+  color: #64748b;
+  font-family: "Plus Jakarta Sans", sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+  letter-spacing: 0.03em;
+}
+.vlan-tab:hover {
+  background: rgba(16,185,129,0.08);
+  color: #94a3b8;
+  border-color: rgba(16,185,129,0.25);
+}
+.vlan-tab.active {
+  background: rgba(16,185,129,0.15);
+  color: #10b981;
+  border-color: rgba(16,185,129,0.4);
+}
+.vlan-tab.active .vlan-tab__id {
+  background: #10b981;
+  color: #0f1920;
+}
+.vlan-tab__id {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(100,116,139,0.2);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  color: #64748b;
+  transition: all 0.15s ease;
+}
+.vlan-tab__name { text-transform: uppercase; }
+
+.vlan-tab--all .vlan-tab__id { background: rgba(139,92,246,0.2); color: #8b5cf6; }
+.vlan-tab--all.active .vlan-tab__id { background: #8b5cf6; color: #fff; }
+.vlan-tab--all.active { background: rgba(139,92,246,0.15); color: #8b5cf6; border-color: rgba(139,92,246,0.4); }
+
+/* Topbar layout adjustment — stacked for VLAN tabs */
+.topbar {
+  flex-wrap: wrap;
+  height: auto;
+  min-height: 52px;
+  padding-bottom: 0;
+}
+.topbar__vlan-bar {
+  width: 100%;
+  border-top: 1px solid rgba(30,48,61,0.6);
+  padding: 6px 0;
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.topbar__vlan-label {
+  font-size: 10px;
+  color: #475569;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0 12px 0 16px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+</style>
 </head>
 <body>
 
@@ -28,7 +117,7 @@
         </svg>
       </div>
       <div>
-        <div class="brand__title">TMG Monitor <span class="badge badge--vlan">VLAN 70 · 192.168.70.0/24</span></div>
+        <div class="brand__title">TMG Monitor <span class="badge badge--vlan" id="headerVlanBadge">Loading…</span></div>
         <p id="statusLine" class="topbar__status">Connecting to monitor server…</p>
       </div>
     </div>
@@ -56,6 +145,14 @@
     <div class="status-indicator">
       <span class="live-pulse" id="liveDot"></span>
       <span id="liveText">LIVE</span>
+    </div>
+  </div>
+
+  <!-- VLAN Tabs row -->
+  <div class="topbar__vlan-bar">
+    <span class="topbar__vlan-label">VLAN</span>
+    <div class="vlan-tabs" id="vlanTabs">
+      <!-- Populated dynamically from /api/vlans -->
     </div>
   </div>
 </header>
@@ -130,7 +227,7 @@
   <section class="card card--main">
     <div class="card__head">
       <div>
-        <h2 class="card__title">VLAN 70 — Live Device Activity</h2>
+        <h2 class="card__title" id="deviceTableTitle">Live Device Activity</h2>
         <p class="card__subtitle">Real-time host status, session durations, app traffic, and engagement. <strong>Click any host to inspect full history.</strong></p>
       </div>
       <div class="table-controls">
@@ -158,7 +255,7 @@
         <thead>
           <tr>
             <th style="width:6%">Status</th>
-            <th style="width:19%">IP & Host / MAC</th>
+            <th style="width:19%">IP &amp; Host / MAC</th>
             <th style="width:13%">Last Seen</th>
             <th style="width:29%">Applications Accessed</th>
             <th style="width:15%">Traffic ↓↑</th>
@@ -167,7 +264,7 @@
           </tr>
         </thead>
         <tbody id="hostsBody">
-          <tr><td colspan="7" class="empty-state">Loading VLAN 70 host data…</td></tr>
+          <tr><td colspan="7" class="empty-state">Loading host data…</td></tr>
         </tbody>
       </table>
     </div>
@@ -182,7 +279,7 @@
     <section class="card chart-card">
       <div class="card__head">
         <div>
-          <h2 class="card__title">VLAN 70 Bandwidth Timeline</h2>
+          <h2 class="card__title" id="throughputChartTitle">VLAN Bandwidth Timeline</h2>
           <p class="card__subtitle" id="trafficChartSub">Download / upload throughput over time</p>
         </div>
       </div>
@@ -195,7 +292,7 @@
       <div class="card__head">
         <div>
           <h2 class="card__title">Top Application Breakdown</h2>
-          <p class="card__subtitle">Aggregated nDPI protocol usage across VLAN</p>
+          <p class="card__subtitle" id="appsChartSub">Aggregated nDPI protocol usage</p>
         </div>
       </div>
       <div class="chart-wrap">
@@ -208,7 +305,7 @@
   <section class="card">
     <div class="card__head">
       <div>
-        <h2 class="card__title">Security & Traffic Alert Log</h2>
+        <h2 class="card__title">Security &amp; Traffic Alert Log</h2>
         <p class="card__subtitle">Persistent log of events and threshold crossings</p>
       </div>
     </div>
@@ -226,7 +323,7 @@
   <div class="drawer" id="hostDrawer">
     <div class="drawer__header">
       <div class="drawer__title-group">
-        <div class="host-pill" id="drawerIp">192.168.70.x</div>
+        <div class="host-pill" id="drawerIp">—</div>
         <div>
           <h3 id="drawerName" class="drawer__name">—</h3>
           <span id="drawerMac" class="drawer__mac">MAC: —</span>
@@ -315,7 +412,7 @@
 </div>
 
 <footer class="footer">
-  <span>TMG Network Monitor · VLAN 70 · Powered by ntopng REST API v2 · Persistent local history</span>
+  <span id="footerText">TMG Network Monitor · Powered by ntopng REST API v2 · Persistent local history</span>
 </footer>
 
 <script src="app.js"></script>

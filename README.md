@@ -1,6 +1,6 @@
 # TMG Network Monitor
 
-**Real-time VLAN 70 network monitoring dashboard** powered by [ntopng](https://www.ntop.org/). Track every device on your network, see which applications they're using, identify blocked traffic, and keep a full 30-day history — all in a clean Grafana-style dark interface.
+**Real-time multi-VLAN network monitoring dashboard** powered by [ntopng](https://www.ntop.org/). Track every device across all your VLANs, see which applications they're using, identify blocked traffic, and keep a full 30-day history — all in a clean Grafana-style dark interface.
 
 ![Dashboard Preview](docs/preview.png)
 
@@ -8,8 +8,27 @@
 
 ## ✨ Features
 
+### 🗂️ Multi-VLAN Support
+- **Monitor all VLANs simultaneously** — a single instance polls and stores data for every configured VLAN
+- **VLAN tab switcher** in the dashboard header — click any VLAN tab to filter the entire view (device table, charts, KPI cards) to that segment
+- **"ALL" tab** — aggregate view showing every host across all VLANs with a `VLAN·NAME` badge on each row
+- Easily configurable via environment variables — no code changes needed to add/remove VLANs
+
+**Default VLAN map:**
+
+| VLAN | Name |
+|------|------|
+| 5    | MESH |
+| 10   | OPERATIONS |
+| 30   | SALES |
+| 50   | WEB |
+| 60   | DMT |
+| 70   | NETIS |
+| 80   | CEO |
+| 100  | DEFAULT |
+
 ### 📡 Live Monitoring
-- **Real-time device table** — every host on VLAN 70 (192.168.70.0/24) shown with status, last-seen time, and current bandwidth
+- **Real-time device table** — every host on monitored VLANs shown with status, last-seen time, and current bandwidth
 - **30-second polling** of ntopng REST API, with data stored locally in SQLite
 - **Live clock** and "Last Poll" timestamp always visible in the header
 - **Network health bar** (top edge) — green = live, amber = stale, red = offline
@@ -35,7 +54,7 @@ Active devices get a green glow row highlight so you can instantly spot who's on
 ### 📈 Bandwidth & Charts
 - **Bandwidth % bar** per device — see at a glance who is consuming the most
 - **VLAN Throughput Timeline** chart (download + upload over time)
-- **Top Apps Breakdown** bar chart (aggregated across entire VLAN)
+- **Top Apps Breakdown** bar chart — scoped to the selected VLAN (or all VLANs)
 - **Per-host bandwidth timeline** with download/upload split in the host drawer
 
 ### 🗂️ 6 KPI Cards
@@ -45,7 +64,7 @@ Active devices get a green glow row highlight so you can instantly spot who's on
 | Upload | Current VLAN upload speed + peak |
 | Total VLAN Bandwidth | Sum of all host bps |
 | Active / Total Devices | How many devices are actively sending data |
-| Top Dominant App | Highest-traffic application across all hosts |
+| Top Dominant App | Highest-traffic application across selected scope |
 | App Engagement | Count of actively-receiving apps + count of possibly-blocked apps |
 
 ### 🔍 Host Deep-Dive Drawer
@@ -56,6 +75,7 @@ Click any device row to open the inspection drawer:
 - **Engagement remark** per app: `● Active` or `✕ Blocked?`
 - **Bandwidth timeline** chart (download + upload split)
 - **Time window selector**: Last 24h / 7 Days / 30 Days
+- Shows the **VLAN name** (e.g. `VLAN 70 · NETIS`) in the host details
 
 ### 🏷️ Custom Device Names
 Click the ✏️ pencil icon next to any device name to give it a friendly alias (e.g. "Jason's Phone"). Names are stored persistently in SQLite.
@@ -92,11 +112,20 @@ NTOPNG_USER=admin                       # ntopng username
 NTOPNG_PASS=yourpassword                # ntopng password
 NTOPNG_IFID=0                           # Interface ID (usually 0)
 
-VLAN_ID=70                              # VLAN to monitor
+# Multi-VLAN: comma-separated list of VLAN IDs to monitor
+VLAN_IDS=5,10,30,50,60,70,80,100
+
+# Human-readable names (id:Name pairs, comma-separated)
+VLAN_NAMES=5:MESH,10:OPERATIONS,30:SALES,50:WEB,60:DMT,70:NETIS,80:CEO,100:DEFAULT
+
 POLL_INTERVAL_SECONDS=30               # How often to poll ntopng
 RETENTION_DAYS=30                       # Days of history to keep
 PORT=4070                               # Dashboard port
 ```
+
+> [!NOTE]
+> The old `VLAN_ID` single-value variable is still supported for backward compatibility.
+> `VLAN_IDS` takes priority if set. Built-in default names are applied for any VLAN not listed in `VLAN_NAMES`.
 
 ### 3. Start
 ```bash
@@ -139,15 +168,15 @@ Open **http://localhost:4070** in your browser.
 ```
 TMG-monitoring/
 ├── server/
-│   ├── server.js          # Express app + REST routes
-│   ├── db.js              # SQLite schema, queries, migrations
-│   ├── poller.js          # Background ntopng polling loop
+│   ├── server.js          # Express app + REST routes + multi-VLAN config
+│   ├── db.js              # SQLite schema, queries, VLAN-aware filters, migrations
+│   ├── poller.js          # Background poller — resolves each host to its VLAN
 │   ├── ntopngClient.js    # ntopng REST API v2 client
 │   ├── .env               # 🔒 Your credentials (not committed)
 │   └── .env.example       # Template
 ├── public/
-│   ├── index.html         # Dashboard HTML
-│   ├── app.js             # Dashboard logic (vanilla JS)
+│   ├── index.html         # Dashboard HTML — VLAN tab switcher
+│   ├── app.js             # Dashboard logic — VLAN-aware filtering & labels
 │   ├── styles.css         # Dark analytics theme
 │   └── vendor/
 │       └── chart.umd.js   # Chart.js (bundled, no CDN dependency)
@@ -161,11 +190,12 @@ TMG-monitoring/
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/status` | Poll status, DB stats, config |
-| `GET /api/hosts/summary?hours=24` | All VLAN 70 hosts with top apps |
+| `GET /api/status` | Poll status, DB stats, full VLAN config |
+| `GET /api/vlans` | List of all configured VLANs with names and subnets |
+| `GET /api/hosts/summary?hours=24[&vlan=70]` | All hosts with top apps (optionally filtered to one VLAN) |
 | `GET /api/hosts/:ip/details?hours=24` | Full app history for one host |
 | `GET /api/history/traffic?hours=24` | Interface bandwidth timeline |
-| `GET /api/apps/top?hours=24&limit=10` | Top applications across VLAN |
+| `GET /api/apps/top?hours=24&limit=10[&vlan=70]` | Top applications (optionally scoped to one VLAN) |
 | `GET /api/alerts?hours=168` | Alert log |
 | `GET /api/aliases` | Custom device name aliases |
 | `POST /api/aliases` | Set/update alias `{ ip, name }` |
@@ -179,9 +209,9 @@ SQLite database stored at `/app/server/data/vlan70_history.sqlite3` (Docker volu
 | Table | Description |
 |-------|-------------|
 | `interface_snapshots` | Per-poll VLAN bandwidth metrics |
-| `host_snapshots` | Per-host traffic snapshot per poll |
-| `host_app_snapshots` | Per-host per-application bytes/flows |
-| `app_snapshots` | Interface-wide L7 app breakdown |
+| `host_snapshots` | Per-host traffic snapshot per poll (tagged with `vlan` column) |
+| `host_app_snapshots` | Per-host per-application bytes/flows (tagged with `vlan` column) |
+| `app_snapshots` | Interface-wide L7 app breakdown per VLAN |
 | `alerts_log` | ntopng alerts |
 | `aliases` | Custom device friendly names |
 
@@ -195,7 +225,9 @@ SQLite database stored at `/app/server/data/vlan70_history.sqlite3` (Docker volu
 | `NTOPNG_USER` | — | ntopng username (required) |
 | `NTOPNG_PASS` | — | ntopng password (required) |
 | `NTOPNG_IFID` | `0` | Interface ID to monitor |
-| `VLAN_ID` | `70` | VLAN number to filter hosts |
+| `VLAN_IDS` | `70` | Comma-separated VLAN IDs to monitor (e.g. `5,10,70,100`) |
+| `VLAN_NAMES` | *(built-in)* | Comma-separated `id:Name` pairs (e.g. `5:MESH,70:NETIS`) |
+| `VLAN_ID` | `70` | Legacy single-VLAN fallback (ignored if `VLAN_IDS` is set) |
 | `POLL_INTERVAL_SECONDS` | `30` | How often to poll ntopng |
 | `RETENTION_DAYS` | `30` | Days of history to retain |
 | `PORT` | `4070` | Dashboard HTTP port |
@@ -219,6 +251,7 @@ Your history database is preserved in a Docker volume and survives rebuilds.
 - **Host-level** Sent ↑ / Received ↓ comes directly from ntopng's host stats and is accurate
 - **Per-app** Sent ↑ / Received ↓ is **estimated** by proportionally applying the host's directional ratio to each app's total bytes. ntopng's L7 protocol stats endpoint does not expose per-application directional breakdowns, so this is a best approximation
 - The **engagement indicator** (● Active / ✕ Blocked?) uses the estimated values, so treat `✕ Blocked?` as a signal to investigate, not a guaranteed determination
+- **VLAN resolution**: ntopng sometimes reports internal hosts with `vlan=0` (untagged/native). The poller resolves these to the correct VLAN by matching the host's IP against monitored subnets (e.g. `192.168.70.x` → VLAN 70)
 
 ---
 

@@ -17,16 +17,57 @@ function positiveNumber(value, fallback, name) {
   return fallback;
 }
 
+// ── VLAN configuration ────────────────────────────────────────────────────────
+// VLAN_IDS: comma-separated list of VLAN IDs to monitor (e.g. "5,10,30,50,60,70,80,100")
+// VLAN_NAMES: comma-separated "id:name" pairs (e.g. "5:MESH,10:OPERATIONS,70:NETIS")
+// Falls back to legacy VLAN_ID if VLAN_IDS is not set.
+function parseVlanIds(raw) {
+  if (!raw || !raw.trim()) return null;
+  return raw.split(",").map((s) => s.trim()).filter(Boolean).map(Number).filter(Number.isFinite);
+}
+
+function parseVlanNames(raw) {
+  const map = {};
+  if (!raw || !raw.trim()) return map;
+  raw.split(",").forEach((part) => {
+    const [id, ...nameParts] = part.trim().split(":");
+    const name = nameParts.join(":").trim();
+    if (id && name) map[Number(id)] = name;
+  });
+  return map;
+}
+
 const PORT                  = positiveNumber(process.env.PORT, 4070, "PORT");
-const VLAN_ID               = positiveNumber(process.env.VLAN_ID, 70, "VLAN_ID");
-const IFID                  = process.env.NTOPNG_IFID || "0";
 const POLL_INTERVAL_SECONDS = positiveNumber(process.env.POLL_INTERVAL_SECONDS, 30, "POLL_INTERVAL_SECONDS");
 const RETENTION_DAYS        = positiveNumber(process.env.RETENTION_DAYS, 30, "RETENTION_DAYS");
-const pollingConfigured     = Boolean(process.env.NTOPNG_URL && process.env.NTOPNG_USER && process.env.NTOPNG_PASS);
+const IFID                  = process.env.NTOPNG_IFID || "0";
+
+// Multi-VLAN support: VLAN_IDS overrides legacy VLAN_ID
+const rawVlanIds = process.env.VLAN_IDS || process.env.VLAN_ID || "70";
+const VLAN_IDS   = parseVlanIds(rawVlanIds) || [70];
+
+// VLAN name map — applied over defaults or any not listed
+const DEFAULT_NAMES = {
+  5: "MESH", 10: "OPERATIONS", 30: "SALES",
+  50: "WEB", 60: "DMT", 70: "NETIS", 80: "CEO", 100: "DEFAULT",
+};
+const envVlanNames = parseVlanNames(process.env.VLAN_NAMES || "");
+const VLAN_NAMES   = { ...DEFAULT_NAMES, ...envVlanNames };
+
+// Build the config object sent to the frontend
+const VLANS_CONFIG = VLAN_IDS.map((id) => ({
+  id,
+  name:   VLAN_NAMES[id] || `VLAN ${id}`,
+  subnet: `192.168.${id}.0/24`,
+}));
+
+const pollingConfigured = Boolean(process.env.NTOPNG_URL && process.env.NTOPNG_USER && process.env.NTOPNG_PASS);
 
 if (!pollingConfigured) {
   console.warn("[startup] ntopng credentials are incomplete; the dashboard will run, but polling is disabled.");
 }
+
+console.log(`[startup] Monitoring VLANs: ${VLAN_IDS.map((id) => `${id} (${VLAN_NAMES[id] || id})`).join(", ")}`);
 
 const client = makeClient({
   baseUrl: process.env.NTOPNG_URL,
@@ -38,7 +79,7 @@ const client = makeClient({
 const stopPoller = pollingConfigured
   ? startPoller({
       client,
-      vlan:            VLAN_ID,
+      vlans:           VLAN_IDS,
       intervalSeconds: POLL_INTERVAL_SECONDS,
       retentionDays:   RETENTION_DAYS,
       log: (msg) => console.log(msg),
@@ -59,13 +100,23 @@ function boundedLimit(value, fallback, maximum) {
   return Math.min(Math.floor(positiveNumber(value, fallback, "limit")), maximum);
 }
 
+// Parse optional ?vlan= query param; null = all monitored vlans
+function parseVlanParam(query) {
+  if (!query.vlan) return null;
+  const v = Number(query.vlan);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
 // ── Health ────────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 // ── Status ────────────────────────────────────────────────────────────────
 app.get("/api/status", (_req, res) => {
   res.json({
-    vlan: VLAN_ID, ifid: IFID,
+    // Legacy compat: vlan = first monitored VLAN
+    vlan: VLAN_IDS[0],
+    vlans: VLANS_CONFIG,
+    ifid: IFID,
     pollIntervalSeconds: POLL_INTERVAL_SECONDS,
     retentionDays: RETENTION_DAYS,
     pollingConfigured,
@@ -87,13 +138,16 @@ app.post("/api/aliases", (req, res) => {
 });
 
 // ── Hosts ─────────────────────────────────────────────────────────────────
+// ?vlan=70 filters to specific VLAN; omit for all monitored VLANs
 app.get("/api/hosts/summary", (req, res) => {
-  res.json(db.getLatestHostsList(since(req.query.hours || 24)));
+  const vlan = parseVlanParam(req.query);
+  res.json(db.getLatestHostsList(since(req.query.hours || 24), vlan ? [vlan] : VLAN_IDS));
 });
 
 // Legacy alias
 app.get("/api/live/hosts", (req, res) => {
-  res.json(db.getLatestHostsList(since(req.query.hours || 24)));
+  const vlan = parseVlanParam(req.query);
+  res.json(db.getLatestHostsList(since(req.query.hours || 24), vlan ? [vlan] : VLAN_IDS));
 });
 
 app.get("/api/hosts/:ip/details", (req, res) => {
@@ -106,18 +160,25 @@ app.get("/api/history/traffic", (req, res) => {
 });
 
 app.get("/api/apps/top", (req, res) => {
-  res.json(db.getTopAppsSince(since(req.query.hours || 24), VLAN_ID, boundedLimit(req.query.limit, 12, 100)));
+  const vlan = parseVlanParam(req.query);
+  res.json(db.getTopAppsSince(since(req.query.hours || 24), vlan ? [vlan] : VLAN_IDS, boundedLimit(req.query.limit, 12, 100)));
 });
 
 app.get("/api/alerts", (req, res) => {
   res.json(db.getAlerts(since(req.query.hours || 168), boundedLimit(req.query.limit, 200, 1000)));
 });
 
+// ── VLAN list ─────────────────────────────────────────────────────────────
+app.get("/api/vlans", (_req, res) => {
+  res.json(VLANS_CONFIG);
+});
+
 // ── Start server ──────────────────────────────────────────────────────────
 const server = app.listen(PORT, () => {
   console.log(`=======================================================`);
-  console.log(`  VLAN ${VLAN_ID} Monitor Dashboard running at:`);
+  console.log(`  TMG Network Monitor Dashboard running at:`);
   console.log(`  http://localhost:${PORT}`);
+  console.log(`  VLANs: ${VLAN_IDS.join(", ")}`);
   console.log(`  Polling ntopng at: ${process.env.NTOPNG_URL} (ifid: ${IFID})`);
   console.log(`=======================================================`);
 });

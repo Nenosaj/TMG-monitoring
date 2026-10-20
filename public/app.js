@@ -1,5 +1,5 @@
 /**
- * TMG VLAN 70 Network Monitor Dashboard
+ * TMG Network Monitor Dashboard — Multi-VLAN Edition
  * Grafana-style dark analytics — real-time device activity, engagement tracking
  */
 
@@ -13,6 +13,10 @@ let allHosts        = [];
 let aliases         = {};
 let availableApps   = new Set();
 let isRefreshing    = false;
+
+// VLAN state
+let vlansConfig     = [];   // [{id, name, subnet}, …] from /api/vlans
+let activeVlanId    = null; // null = ALL
 
 // ── Chart instances ───────────────────────────────────────────────────────────
 let throughputChart   = null;
@@ -101,7 +105,6 @@ function deviceStatus(h) {
 }
 
 // ── App engagement badge ──────────────────────────────────────────────────────
-// Returns HTML to prepend inside an app chip
 function engagementMark(sent, rcvd) {
   const s = Number(sent) || 0;
   const r = Number(rcvd) || 0;
@@ -117,6 +120,95 @@ function updateClock() {
   const timeStr = now.toLocaleTimeString("en-US", { hour:"2-digit", minute:"2-digit", second:"2-digit" });
   const el = document.getElementById("liveClock");
   if (el) el.textContent = `${dateStr} · ${timeStr}`;
+}
+
+// ── VLAN helpers ──────────────────────────────────────────────────────────────
+function getActiveVlan() {
+  return vlansConfig.find((v) => v.id === activeVlanId) || null;
+}
+
+function vlanLabel() {
+  if (activeVlanId === null) return "All VLANs";
+  const v = getActiveVlan();
+  return v ? `VLAN ${v.id} · ${v.name}` : `VLAN ${activeVlanId}`;
+}
+
+function vlanSubnet() {
+  if (activeVlanId === null) return null;
+  const v = getActiveVlan();
+  return v ? v.subnet : `192.168.${activeVlanId}.0/24`;
+}
+
+/** Build the ?vlan= query param string */
+function vlanQS() {
+  return activeVlanId !== null ? `&vlan=${activeVlanId}` : "";
+}
+
+/** Filter a host list to only the active VLAN (or all if none selected). */
+function filterToVlan(hosts) {
+  if (activeVlanId === null) return hosts;
+  const prefix = `192.168.${activeVlanId}.`;
+  return hosts.filter((h) =>
+    Number(h.vlan) === activeVlanId || (typeof h.ip === "string" && h.ip.startsWith(prefix))
+  );
+}
+
+// ── Update dynamic labels based on active VLAN ────────────────────────────────
+function updateVlanLabels() {
+  const v    = getActiveVlan();
+  const label = vlanLabel();
+  const subnet = vlanSubnet();
+
+  // Header badge
+  const badge = document.getElementById("headerVlanBadge");
+  if (badge) badge.textContent = activeVlanId !== null
+    ? `VLAN ${v?.id ?? activeVlanId} · ${subnet ?? ""}`
+    : "All VLANs";
+
+  // Device table title
+  const tableTitle = document.getElementById("deviceTableTitle");
+  if (tableTitle) tableTitle.textContent = `${label} — Live Device Activity`;
+
+  // Throughput chart title
+  const chartTitle = document.getElementById("throughputChartTitle");
+  if (chartTitle) chartTitle.textContent = `${label} Bandwidth Timeline`;
+
+  // Apps chart subtitle
+  const appsSub = document.getElementById("appsChartSub");
+  if (appsSub) appsSub.textContent = `Aggregated nDPI protocol usage${subnet ? ` · ${subnet}` : ""}`;
+
+  // Footer
+  const footer = document.getElementById("footerText");
+  if (footer) footer.textContent = `TMG Network Monitor · ${label} · Powered by ntopng REST API v2 · Persistent local history`;
+}
+
+// ── VLAN tab rendering ────────────────────────────────────────────────────────
+function renderVlanTabs() {
+  const container = document.getElementById("vlanTabs");
+  if (!container) return;
+
+  // "ALL" tab
+  const allTab = document.createElement("button");
+  allTab.className = `vlan-tab vlan-tab--all${activeVlanId === null ? " active" : ""}`;
+  allTab.innerHTML = `<span class="vlan-tab__id">ALL</span><span class="vlan-tab__name">All VLANs</span>`;
+  allTab.addEventListener("click", () => selectVlan(null));
+  container.innerHTML = "";
+  container.appendChild(allTab);
+
+  for (const v of vlansConfig) {
+    const tab = document.createElement("button");
+    tab.className = `vlan-tab${activeVlanId === v.id ? " active" : ""}`;
+    tab.innerHTML = `<span class="vlan-tab__id">${v.id}</span><span class="vlan-tab__name">${v.name}</span>`;
+    tab.addEventListener("click", () => selectVlan(v.id));
+    container.appendChild(tab);
+  }
+}
+
+function selectVlan(vlanId) {
+  activeVlanId = vlanId;
+  renderVlanTabs();
+  updateVlanLabels();
+  refreshAll();
 }
 
 // ── Chart base options ────────────────────────────────────────────────────────
@@ -196,6 +288,19 @@ function initCharts() {
 }
 
 // ── Data fetchers ─────────────────────────────────────────────────────────────
+
+/** Fetch VLAN config from server and build tabs (called once on startup). */
+async function fetchVlans() {
+  try {
+    const data = await apiGet("/api/vlans");
+    vlansConfig = data || [];
+    renderVlanTabs();
+    updateVlanLabels();
+  } catch (err) {
+    console.warn("[vlans] Could not fetch VLAN list:", err.message);
+  }
+}
+
 async function fetchStatus() {
   try {
     const s          = await apiGet("/api/status");
@@ -213,16 +318,17 @@ async function fetchStatus() {
       if (age > s.pollIntervalSeconds * 3) {
         liveDot.classList.add("live-pulse--stale");
         liveText.textContent   = "STALE";
-        statusLine.textContent = `Last poll ${age}s ago · VLAN ${s.vlan} · DB: ${s.dbStats?.hostCount || 0} host rows`;
+        statusLine.textContent = `Last poll ${age}s ago · ${vlanLabel()} · DB: ${s.dbStats?.hostCount || 0} host rows`;
         if (healthBar) healthBar.style.background = "#f59e0b";
       } else {
         liveDot.classList.remove("live-pulse--stale");
         liveText.textContent   = "LIVE";
-        statusLine.textContent = `Monitoring VLAN ${s.vlan} · Subnet 192.168.${s.vlan}.0/24 · Poll: ${s.pollIntervalSeconds}s · DB: ${s.dbStats?.hostAppCount || 0} app records`;
+        const subnetPart = vlanSubnet() ? ` · Subnet ${vlanSubnet()}` : "";
+        statusLine.textContent = `Monitoring ${vlanLabel()}${subnetPart} · Poll: ${s.pollIntervalSeconds}s · DB: ${s.dbStats?.hostAppCount || 0} app records`;
         if (healthBar) healthBar.style.background = "linear-gradient(90deg,#10b981,#06b6d4)";
       }
     } else {
-      statusLine.textContent = `VLAN ${s.vlan} · Waiting for initial poll…`;
+      statusLine.textContent = `${vlanLabel()} · Waiting for initial poll…`;
       if (healthBar) healthBar.style.background = "#64748b";
     }
   } catch (err) {
@@ -237,8 +343,9 @@ async function fetchAliases() {
 }
 
 async function fetchHosts() {
-  const raw = await apiGet(`/api/hosts/summary?hours=${currentHours}`);
-  allHosts  = raw.filter((h) => h.ip.startsWith("192.168.70."));
+  const raw = await apiGet(`/api/hosts/summary?hours=${currentHours}${vlanQS()}`);
+  // When "All VLANs" mode, the server already returns all; client-side filter only if a specific VLAN selected
+  allHosts = filterToVlan(raw);
   allHosts.forEach((h) => { if (aliases[h.ip]) h.name = aliases[h.ip]; });
 
   availableApps.clear();
@@ -303,6 +410,13 @@ function renderHostsTable() {
     const status  = deviceStatus(h);
     const bwPct   = Math.round(((h.bps || 0) / maxBps) * 100);
 
+    // Determine the host label — prefer alias, then name, then show VLAN name if known
+    const vlanInfo = vlansConfig.find((v) => {
+      const prefix = `192.168.${v.id}.`;
+      return Number(h.vlan) === v.id || (typeof h.ip === "string" && h.ip.startsWith(prefix));
+    });
+    const vlanTag = vlanInfo ? `<span class="badge badge--vlan" style="font-size:9px;padding:1px 5px;margin-left:4px">VLAN${vlanInfo.id}·${vlanInfo.name}</span>` : "";
+
     const apps = h.top_apps && h.top_apps.length > 0
       ? h.top_apps
       : (h.top_app ? [{ name:h.top_app, bytes:h.bytes_total, sent:h.bytes_sent, rcvd:h.bytes_rcvd }] : []);
@@ -336,7 +450,7 @@ function renderHostsTable() {
         <td>
           <div class="host-cell">
             <span class="host-ip">${h.ip} <span class="arrow">➜</span></span>
-            <span class="host-sub">${h.name && h.name !== h.ip ? h.name : (h.mac || "VLAN 70 Host")}</span>
+            <span class="host-sub">${h.name && h.name !== h.ip ? h.name : (h.mac || "Network Host")}${activeVlanId === null ? vlanTag : ""}</span>
           </div>
         </td>
         <td>
@@ -428,7 +542,7 @@ async function fetchThroughputChart() {
 }
 
 async function fetchTopAppsChart() {
-  const rows = await apiGet(`/api/apps/top?hours=${currentHours}&limit=8`);
+  const rows = await apiGet(`/api/apps/top?hours=${currentHours}&limit=8${vlanQS()}`);
   appsChart.data.labels           = rows.map((r) => r.app_name);
   appsChart.data.datasets[0].data = rows.map((r) => r.total_bytes);
   appsChart.update();
@@ -475,10 +589,15 @@ async function refreshHostDetails() {
   const apps     = data.apps     || [];
   const timeline = data.timeline || [];
 
+  // Resolve VLAN name for this host
+  const hostVlanId = Number(host.vlan) || activeVlanId;
+  const hostVlan   = vlansConfig.find((v) => v.id === hostVlanId);
+  const vlanDetail = hostVlan ? `VLAN ${hostVlan.id} · ${hostVlan.name}` : `VLAN ${hostVlanId || "?"}`;
+
   const displayName = (host.name && host.name !== host.ip) ? host.name : `Device ${activeHostIp}`;
   document.getElementById("drawerName").innerHTML =
     `${displayName} <span style="font-size:12px;cursor:pointer;opacity:0.6;margin-left:8px" onclick="renameHost('${activeHostIp}','${(host.name||'').replace(/'/g,"&apos;")}')" title="Rename device">✏️</span>`;
-  document.getElementById("drawerMac").textContent        = `MAC: ${host.mac||"Unknown"} · VLAN: ${host.vlan||70}`;
+  document.getElementById("drawerMac").textContent        = `MAC: ${host.mac||"Unknown"} · ${vlanDetail}`;
   document.getElementById("drawerDuration").textContent   = fmtDuration(host.duration_sec);
   document.getElementById("drawerTotalBytes").textContent = fmtBytes(host.bytes_total);
   document.getElementById("drawerSent").textContent       = fmtBytes(host.bytes_sent);
@@ -534,7 +653,6 @@ async function refreshHostDetails() {
   // Timeline chart — download + upload split
   hostTimelineChart.data.labels           = timeline.map((t) => fmtTime(t.ts));
   hostTimelineChart.data.datasets[0].data = timeline.map((t) => t.bps);
-  // Approximate upload from stored bytes_sent delta (best effort)
   hostTimelineChart.data.datasets[1].data = timeline.map((t) => {
     const totalBps = t.bps || 0;
     const sentFrac = t.bytes_total > 0 ? (t.bytes_sent || 0) / t.bytes_total : 0;
@@ -632,8 +750,11 @@ try {
   wireEvents();
   updateClock();
   setInterval(updateClock, 1000);
-  refreshAll();
-  setInterval(refreshAll, 15_000);
+  // Fetch VLAN config first, then start main loop
+  fetchVlans().then(() => {
+    refreshAll();
+    setInterval(refreshAll, 15_000);
+  });
 } catch (err) {
   console.error("Startup error:", err);
   document.getElementById("statusLine").textContent = "Startup error: " + err.message;

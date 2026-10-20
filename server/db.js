@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS host_snapshots (
 CREATE INDEX IF NOT EXISTS idx_host_ts ON host_snapshots(ts);
 CREATE INDEX IF NOT EXISTS idx_host_ip ON host_snapshots(ip);
 CREATE INDEX IF NOT EXISTS idx_host_ip_ts ON host_snapshots(ip, ts);
+CREATE INDEX IF NOT EXISTS idx_host_vlan ON host_snapshots(vlan);
 
 CREATE TABLE IF NOT EXISTS host_app_snapshots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,12 +43,14 @@ CREATE TABLE IF NOT EXISTS host_app_snapshots (
 CREATE INDEX IF NOT EXISTS idx_host_app_ts ON host_app_snapshots(ts);
 CREATE INDEX IF NOT EXISTS idx_host_app_ip_ts ON host_app_snapshots(ip, ts);
 CREATE INDEX IF NOT EXISTS idx_host_app_name ON host_app_snapshots(app_name);
+CREATE INDEX IF NOT EXISTS idx_host_app_vlan ON host_app_snapshots(vlan);
 
 CREATE TABLE IF NOT EXISTS app_snapshots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts INTEGER NOT NULL, vlan INTEGER, app_name TEXT, bytes INTEGER, flows INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_app_ts ON app_snapshots(ts);
+CREATE INDEX IF NOT EXISTS idx_app_vlan ON app_snapshots(vlan);
 
 CREATE TABLE IF NOT EXISTS alerts_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -187,16 +190,33 @@ function prune(retentionDays = 30) {
 }
 
 // ── Query helpers ─────────────────────────────────────────────────────────
+
 function getInterfaceHistory(sinceTs) {
   return db.prepare("SELECT * FROM interface_snapshots WHERE ts >= ? ORDER BY ts ASC").all(sinceTs);
 }
 
-function getLatestHostsList(sinceTs = 0) {
-  const hosts = db.prepare(`
+/**
+ * Get the latest host list, optionally filtered to specific VLANs.
+ * @param {number}   sinceTs  Unix timestamp lower bound
+ * @param {number[]} vlans    Array of VLAN IDs to include (pass all monitored VLANs from server.js)
+ */
+function getLatestHostsList(sinceTs = 0, vlans = [70]) {
+  // Build SQL IN clause for the VLAN list
+  // ntopng often stores internal (untagged) hosts with vlan=0; we also accept
+  // those as long as their IP subnet matches a monitored VLAN.
+  const vlanPlaceholders = vlans.map(() => "?").join(",");
+
+  // We also accept vlan=0 entries whose IP falls in a monitored subnet
+  const subnetConditions = vlans
+    .map(() => "l.ip LIKE ?")
+    .join(" OR ");
+
+  const query = `
     WITH LatestPerHost AS (
       SELECT ip, MAX(ts) AS max_ts
       FROM host_snapshots
-      WHERE ts >= ? AND vlan = ?
+      WHERE ts >= ?
+        AND (vlan IN (${vlanPlaceholders}) OR vlan = 0)
       GROUP BY ip
     ),
     LatestData AS (
@@ -221,8 +241,17 @@ function getLatestHostsList(sinceTs = 0) {
       COALESCE(s.active_snapshots, 1)               AS active_polls
     FROM LatestData l
     LEFT JOIN HistorySummary s ON l.ip = s.ip
+    WHERE l.vlan IN (${vlanPlaceholders}) OR (${subnetConditions})
     ORDER BY l.bps DESC, l.bytes_total DESC
-  `).all(sinceTs, 70, sinceTs);
+  `;
+
+  // Build subnet prefix patterns for LIKE clauses
+  const subnetPatterns = vlans.map((v) => `192.168.${v}.%`);
+
+  // Parameter order: sinceTs, [...vlanPlaceholders for LatestPerHost], sinceTs,
+  //                  [...vlanPlaceholders for WHERE], [...subnetPatterns for WHERE]
+  const params = [sinceTs, ...vlans, sinceTs, ...vlans, ...subnetPatterns];
+  const hosts  = db.prepare(query).all(...params);
 
   const appStmt = db.prepare(`
     SELECT
@@ -282,15 +311,22 @@ function getHostDetails(ip, sinceTs) {
   return { ip, host, sinceTs, apps, timeline };
 }
 
-function getTopAppsSince(sinceTs, vlan, limit = 10) {
+/**
+ * Top apps across a set of VLANs.
+ * @param {number}   sinceTs
+ * @param {number[]} vlans    Array of VLAN IDs
+ * @param {number}   limit
+ */
+function getTopAppsSince(sinceTs, vlans = [70], limit = 10) {
+  const placeholders = vlans.map(() => "?").join(",");
   return db.prepare(`
     SELECT app_name, SUM(bytes) AS total_bytes, SUM(flows) AS total_flows
     FROM app_snapshots
-    WHERE ts >= ? AND vlan = ?
+    WHERE ts >= ? AND vlan IN (${placeholders})
     GROUP BY app_name
     ORDER BY total_bytes DESC
     LIMIT ?
-  `).all(sinceTs, vlan, limit);
+  `).all(sinceTs, ...vlans, limit);
 }
 
 function getAlerts(sinceTs, limit = 200) {
@@ -302,11 +338,17 @@ function getLastPollTs() {
 }
 
 function getDbStats() {
+  // Per-VLAN host counts
+  const vlanRows = db.prepare(
+    "SELECT vlan, COUNT(DISTINCT ip) AS hosts FROM host_snapshots GROUP BY vlan ORDER BY vlan"
+  ).all();
+
   return {
     ifaceCount:   db.prepare("SELECT COUNT(*) AS c FROM interface_snapshots").all()[0]?.c ?? 0,
     hostCount:    db.prepare("SELECT COUNT(*) AS c FROM host_snapshots").all()[0]?.c ?? 0,
     hostAppCount: db.prepare("SELECT COUNT(*) AS c FROM host_app_snapshots").all()[0]?.c ?? 0,
     alertCount:   db.prepare("SELECT COUNT(*) AS c FROM alerts_log").all()[0]?.c ?? 0,
+    vlanStats:    vlanRows,
   };
 }
 
