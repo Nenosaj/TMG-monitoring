@@ -578,6 +578,7 @@ async function openHostDrawer(ip) {
   document.getElementById("drawerName").innerHTML     = "Loading...";
   document.getElementById("drawerMac").textContent    = "MAC: —";
   document.getElementById("drawerAppsBody").innerHTML = `<tr><td colspan="7" class="empty-state">Loading host history…</td></tr>`;
+  resetL7Panel();
   await refreshHostDetails();
 }
 
@@ -664,6 +665,110 @@ async function refreshHostDetails() {
 function closeHostDrawer() {
   document.getElementById("hostDrawerOverlay").classList.remove("open");
   activeHostIp = null;
+}
+
+// ── Live L7 On-Demand Analysis ────────────────────────────────────────────────
+async function fetchLiveL7() {
+  if (!activeHostIp) return;
+
+  const btn    = document.getElementById("l7FetchBtn");
+  const result = document.getElementById("l7Result");
+
+  // Loading state
+  btn.disabled   = true;
+  btn.innerHTML  = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" class="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Fetching…`;
+  result.className = "l7-result l7-result--loading";
+  result.innerHTML = `<div class="l7-loading"><div class="l7-spinner"></div><span>Querying ntopng for live L7 data…</span></div>`;
+
+  try {
+    const data = await apiGet(`/api/hosts/${encodeURIComponent(activeHostIp)}/l7/live`);
+    renderLiveL7(data);
+  } catch (err) {
+    result.className = "l7-result l7-result--error";
+    result.innerHTML = `<div class="l7-error-msg"><strong>Failed to fetch L7 data</strong><br><span style="font-size:11px;color:#94a3b8">${err.message}</span></div>`;
+  } finally {
+    btn.disabled  = false;
+    btn.innerHTML = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> Refresh`;
+  }
+}
+window.fetchLiveL7 = fetchLiveL7;
+
+function renderLiveL7(data) {
+  const result = document.getElementById("l7Result");
+  const apps   = data.apps || [];
+  const fetchedAt = data.fetched_at ? new Date(data.fetched_at * 1000).toLocaleTimeString() : "—";
+
+  if (apps.length === 0) {
+    result.className = "l7-result l7-result--empty";
+    result.innerHTML = `<div class="l7-idle-msg"><p>No active L7 application traffic detected for this host right now.</p><p style="font-size:11px;color:#475569">The device may be idle. Try again when it is actively sending/receiving traffic.</p></div>`;
+    return;
+  }
+
+  result.className = "l7-result l7-result--loaded";
+
+  const rows = apps.map((a, i) => {
+    const color   = APP_COLORS[i % APP_COLORS.length];
+    const sentPct = a.bytes > 0 ? Math.round((a.bytes_sent / a.bytes) * 100) : 0;
+    const rcvdPct = 100 - sentPct;
+    return `
+      <tr>
+        <td>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0;display:inline-block"></span>
+            <span class="app-chip app-chip--primary"><strong>${a.app_name}</strong></span>
+          </div>
+        </td>
+        <td>
+          <div class="l7-bar-wrap">
+            <div class="l7-bar" style="width:${a.pct}%;background:${color}"></div>
+          </div>
+          <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted)">${a.pct}%</span>
+        </td>
+        <td style="font-family:var(--font-mono);font-size:12px">${fmtBytes(a.bytes)}</td>
+        <td style="font-family:var(--font-mono);font-size:12px;color:var(--cyan)">${fmtBytes(a.bytes_sent)}</td>
+        <td style="font-family:var(--font-mono);font-size:12px;color:var(--accent-light)">${fmtBytes(a.bytes_rcvd)}</td>
+        <td style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted)">${a.flows || "—"}</td>
+      </tr>`;
+  }).join("");
+
+  result.innerHTML = `
+    <div class="l7-meta">
+      <span class="badge" style="background:rgba(16,185,129,0.12);color:#10b981;border:1px solid rgba(16,185,129,0.25)">● Live snapshot · ${fetchedAt}</span>
+      <span style="font-size:11px;color:#475569">${apps.length} protocols detected · ${fmtBytes(data.total_bytes)} total · ${data.num_flows || 0} flows</span>
+    </div>
+    <div class="drawer__table-wrap" style="margin-top:10px">
+      <table class="drawer__table">
+        <thead>
+          <tr>
+            <th>Application / Protocol</th>
+            <th>Traffic Share</th>
+            <th>Total</th>
+            <th>↑ Sent</th>
+            <th>↓ Received</th>
+            <th>Flows</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+// Reset L7 panel when opening a new host
+function resetL7Panel() {
+  const result = document.getElementById("l7Result");
+  const btn    = document.getElementById("l7FetchBtn");
+  if (result) {
+    result.className = "l7-result l7-result--idle";
+    result.innerHTML = `<div class="l7-idle-msg">
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#475569"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <p>Click <strong>Analyze Now</strong> to fetch real-time Layer 7 application data for this device directly from ntopng.</p>
+      <p style="font-size:11px;color:#475569;margin-top:4px">This is an on-demand request — it does not run in the background.</p>
+    </div>`;
+  }
+  if (btn) {
+    btn.disabled  = false;
+    btn.innerHTML = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> Analyze Now`;
+  }
 }
 
 // ── Rename (alias) ────────────────────────────────────────────────────────────

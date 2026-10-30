@@ -308,3 +308,141 @@ body {
 @media (max-width: 1024px) { .kpi-grid { grid-template-columns: repeat(2, 1fr); } .charts-row { grid-template-columns: 1fr; } .drawer { width: 100vw; } }
 @media (max-width: 768px) { .topbar { flex-direction: column; gap: 12px; align-items: flex-start; } .topbar__right { width: 100%; justify-content: space-between; } .drawer__stats-grid { grid-template-columns: repeat(3, 1fr); } .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 480px) { .drawer__stats-grid { grid-template-columns: repeat(2, 1fr); } }
+
+/* ── L7 On-Demand Analysis Panel ─────────────────────────────────────────── */
+.l7-panel {
+  margin: 20px 0 0;
+  border: 1px solid rgba(30, 48, 61, 0.8);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.l7-panel .drawer__subhead {
+  background: rgba(16, 185, 129, 0.05);
+  border-bottom: 1px solid rgba(30, 48, 61, 0.6);
+  padding: 10px 16px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.l7-panel .drawer__subhead h4 {
+  margin: 0;
+  font-size: 13px;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.l7-fetch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: 6px;
+  font-family: "Plus Jakarta Sans", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  letter-spacing: 0.03em;
+}
+.l7-fetch-btn:hover:not(:disabled) {
+  background: rgba(16, 185, 129, 0.25);
+  border-color: rgba(16, 185, 129, 0.5);
+}
+.l7-fetch-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.l7-result {
+  min-height: 100px;
+  padding: 16px;
+}
+
+.l7-result--idle,
+.l7-result--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.l7-idle-msg {
+  text-align: center;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.6;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+}
+.l7-idle-msg p { margin: 0; }
+.l7-idle-msg strong { color: #94a3b8; }
+
+.l7-result--loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.l7-loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #64748b;
+  font-size: 13px;
+}
+.l7-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(16, 185, 129, 0.2);
+  border-top-color: #10b981;
+  border-radius: 50%;
+  animation: l7spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes l7spin {
+  to { transform: rotate(360deg); }
+}
+
+.l7-result--error .l7-error-msg {
+  text-align: center;
+  color: #f43f5e;
+  font-size: 12px;
+  padding: 12px 0;
+}
+
+.l7-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.l7-bar-wrap {
+  width: 80px;
+  height: 5px;
+  background: rgba(30, 48, 61, 0.8);
+  border-radius: 3px;
+  overflow: hidden;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.l7-bar {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+/* Spin animation for fetch button loading icon */
+.spin {
+  animation: l7spin 0.7s linear infinite;
+}

@@ -173,6 +173,51 @@ app.get("/api/vlans", (_req, res) => {
   res.json(VLANS_CONFIG);
 });
 
+// ── On-demand Live L7 Analysis ────────────────────────────────────────────
+// Fires a single live request to ntopng for one host — NOT stored, NOT polled.
+app.get("/api/hosts/:ip/l7/live", async (req, res) => {
+  if (!pollingConfigured) {
+    return res.status(503).json({ error: "ntopng not configured" });
+  }
+  const ip = req.params.ip;
+  if (!ip) return res.status(400).json({ error: "ip required" });
+
+  try {
+    const [l7Stats, hostDetail] = await Promise.allSettled([
+      client.getHostL7Stats(ip),
+      client.getHostDetails(ip),
+    ]);
+
+    const apps = (l7Stats.status === "fulfilled" ? l7Stats.value : []) || [];
+    const host = (hostDetail.status === "fulfilled" ? hostDetail.value : null) || null;
+
+    // Compute totals for percentage
+    const totalBytes = apps.reduce((s, a) => s + (a.value ?? 0), 0) || 1;
+
+    const result = apps
+      .filter(a => (a.value ?? 0) > 0)
+      .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
+      .map(a => ({
+        app_name:   a.label || a.name || "Unknown",
+        bytes:      a.value ?? 0,
+        bytes_sent: a.sent  ?? 0,
+        bytes_rcvd: a.rcvd  ?? 0,
+        flows:      a.count ?? 0,
+        pct:        Math.round(((a.value ?? 0) / totalBytes) * 100),
+      }));
+
+    res.json({
+      ip,
+      fetched_at: Math.floor(Date.now() / 1000),
+      total_bytes: totalBytes,
+      num_flows: host?.num_flows?.total ?? host?.num_flows ?? 0,
+      apps: result,
+    });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // ── Start server ──────────────────────────────────────────────────────────
 const server = app.listen(PORT, () => {
   console.log(`=======================================================`);

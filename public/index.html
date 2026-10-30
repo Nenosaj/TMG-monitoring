@@ -400,6 +400,24 @@
         </table>
       </div>
 
+      <!-- Live L7 Analysis Panel -->
+      <div class="l7-panel" id="l7Panel">
+        <div class="drawer__subhead">
+          <h4>Live L7 Application Analysis</h4>
+          <button class="l7-fetch-btn" id="l7FetchBtn" onclick="fetchLiveL7()">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            Analyze Now
+          </button>
+        </div>
+        <div id="l7Result" class="l7-result l7-result--idle">
+          <div class="l7-idle-msg">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#475569"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <p>Click <strong>Analyze Now</strong> to fetch real-time Layer 7 application data for this device directly from ntopng.</p>
+            <p style="font-size:11px;color:#475569;margin-top:4px">This is an on-demand request — it does not run in the background.</p>
+          </div>
+        </div>
+      </div>
+
       <div class="drawer__subhead" style="margin-top:20px">
         <h4>Bandwidth Timeline</h4>
       </div>
