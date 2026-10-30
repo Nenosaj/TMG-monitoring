@@ -124,12 +124,15 @@
   </div>
 
   <div class="topbar__center">
-    <div class="range-selector" id="globalRangeToggle">
-      <button data-hours="1"   class="range-btn">1h</button>
-      <button data-hours="6"   class="range-btn">6h</button>
-      <button data-hours="24"  class="range-btn active">24h</button>
-      <button data-hours="168" class="range-btn">7d</button>
-      <button data-hours="720" class="range-btn">30d</button>
+    <div class="view-switcher" id="viewSwitcher">
+      <button class="view-btn active" data-view="live" id="btnViewLive">
+        <span class="view-dot"></span>
+        <span>Live Monitor</span>
+      </button>
+      <button class="view-btn" data-view="history" id="btnViewHistory">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+        <span>Historical Analytics</span>
+      </button>
     </div>
   </div>
 
@@ -160,161 +163,268 @@
 <!-- Main Container -->
 <div class="app-container">
 
-  <!-- KPI Metrics Banner — 6 cards -->
-  <section class="kpi-grid">
-    <div class="kpi-card">
-      <div class="kpi-card__header">
-        <span class="kpi-title">Download</span>
-        <span class="kpi-icon kpi-icon--down">↓</span>
-      </div>
-      <div class="kpi-value" id="kpiDown">—</div>
-      <div class="kpi-sub" id="kpiDownSub">Peak: —</div>
-    </div>
+  <!-- ======================================================================= -->
+  <!-- VIEW 1: 📡 LIVE MONITOR (Real-Time Only)                               -->
+  <!-- ======================================================================= -->
+  <div id="liveView" class="view-pane active">
 
-    <div class="kpi-card">
-      <div class="kpi-card__header">
-        <span class="kpi-title">Upload</span>
-        <span class="kpi-icon kpi-icon--up">↑</span>
-      </div>
-      <div class="kpi-value" id="kpiUp">—</div>
-      <div class="kpi-sub" id="kpiUpSub">Peak: —</div>
-    </div>
-
-    <div class="kpi-card">
-      <div class="kpi-card__header">
-        <span class="kpi-title">Total VLAN Bandwidth</span>
-        <span class="kpi-icon" style="background:rgba(139,92,246,0.12);color:#8b5cf6">∑</span>
-      </div>
-      <div class="kpi-value" id="kpiTotalBw">—</div>
-      <div class="kpi-sub" id="kpiTotalBwSub">Across all hosts</div>
-    </div>
-
-    <div class="kpi-card">
-      <div class="kpi-card__header">
-        <span class="kpi-title">Active / Total Devices</span>
-        <span class="kpi-icon kpi-icon--devices">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="2" y="3" width="20" height="14" rx="2"></rect>
-            <line x1="8" y1="21" x2="16" y2="21"></line>
-            <line x1="12" y1="17" x2="12" y2="21"></line>
-          </svg>
-        </span>
-      </div>
-      <div class="kpi-value" id="kpiHosts">—</div>
-      <div class="kpi-sub" id="kpiHostsSub">In selected timeframe</div>
-    </div>
-
-    <div class="kpi-card">
-      <div class="kpi-card__header">
-        <span class="kpi-title">Top Dominant App</span>
-        <span class="kpi-icon kpi-icon--app">★</span>
-      </div>
-      <div class="kpi-value" id="kpiTopApp">—</div>
-      <div class="kpi-sub" id="kpiTopAppBytes">—</div>
-    </div>
-
-    <div class="kpi-card">
-      <div class="kpi-card__header">
-        <span class="kpi-title">App Engagement</span>
-        <span class="kpi-icon" style="background:rgba(16,185,129,0.12);color:#10b981">●</span>
-      </div>
-      <div class="kpi-value" id="kpiEngaged">—</div>
-      <div class="kpi-sub" id="kpiEngagedSub">apps actively receiving</div>
-    </div>
-  </section>
-
-  <!-- Device Activity Table -->
-  <section class="card card--main">
-    <div class="card__head">
-      <div>
-        <h2 class="card__title" id="deviceTableTitle">Live Device Activity</h2>
-        <p class="card__subtitle">Real-time host status, session durations, app traffic, and engagement. <strong>Click any host to inspect full history.</strong></p>
-      </div>
-      <div class="table-controls">
-        <div class="search-box">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="11" cy="11" r="8"></circle>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-          </svg>
-          <input type="text" id="hostSearch" placeholder="Search IP, name, MAC..." />
+    <!-- Live KPI Metrics — 4 cards -->
+    <section class="kpi-grid kpi-grid--4">
+      <div class="kpi-card">
+        <div class="kpi-card__header">
+          <span class="kpi-title">Live Download</span>
+          <span class="kpi-icon kpi-icon--down">↓</span>
         </div>
-        <select id="appFilter" class="select-box">
-          <option value="">All Applications</option>
-        </select>
-        <select id="sortBy" class="select-box">
-          <option value="bps">Sort: Highest Bandwidth</option>
-          <option value="bytes">Sort: Total Traffic</option>
-          <option value="duration">Sort: Longest Duration</option>
-          <option value="ip">Sort: IP Address</option>
-        </select>
+        <div class="kpi-value" id="kpiLiveDown">—</div>
+        <div class="kpi-sub" id="kpiLiveDownSub">Real-time throughput</div>
       </div>
-    </div>
 
-    <div class="table-wrap">
-      <table class="hosts-table" id="hostsTable">
-        <thead>
-          <tr>
-            <th style="width:6%">Status</th>
-            <th style="width:19%">IP &amp; Host / MAC</th>
-            <th style="width:13%">Last Seen</th>
-            <th style="width:29%">Applications Accessed</th>
-            <th style="width:15%">Traffic ↓↑</th>
-            <th style="width:10%">Bandwidth</th>
-            <th style="width:8%">BW %</th>
-          </tr>
-        </thead>
-        <tbody id="hostsBody">
-          <tr><td colspan="7" class="empty-state">Loading host data…</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="table-footer">
-      <span id="hostsCountLabel">Showing 0 devices</span>
-      <span class="table-hint">💡 Click any row to inspect full app history</span>
-    </div>
-  </section>
-
-  <!-- Charts Row -->
-  <div class="charts-row">
-    <section class="card chart-card">
-      <div class="card__head">
-        <div>
-          <h2 class="card__title" id="throughputChartTitle">VLAN Bandwidth Timeline</h2>
-          <p class="card__subtitle" id="trafficChartSub">Download / upload throughput over time</p>
+      <div class="kpi-card">
+        <div class="kpi-card__header">
+          <span class="kpi-title">Live Upload</span>
+          <span class="kpi-icon kpi-icon--up">↑</span>
         </div>
+        <div class="kpi-value" id="kpiLiveUp">—</div>
+        <div class="kpi-sub" id="kpiLiveUpSub">Real-time throughput</div>
       </div>
-      <div class="chart-wrap">
-        <canvas id="throughputChart"></canvas>
+
+      <div class="kpi-card">
+        <div class="kpi-card__header">
+          <span class="kpi-title">Live VLAN Bandwidth</span>
+          <span class="kpi-icon" style="background:rgba(139,92,246,0.12);color:#8b5cf6">∑</span>
+        </div>
+        <div class="kpi-value" id="kpiLiveTotalBw">—</div>
+        <div class="kpi-sub" id="kpiLiveTotalBwSub">Active host consumption</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-card__header">
+          <span class="kpi-title">Active / Online Devices</span>
+          <span class="kpi-icon kpi-icon--devices">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+          </span>
+        </div>
+        <div class="kpi-value" id="kpiLiveHosts">—</div>
+        <div class="kpi-sub" id="kpiLiveHostsSub">In latest poll snapshot</div>
       </div>
     </section>
 
-    <section class="card chart-card">
+    <!-- Live Device Activity Table -->
+    <section class="card card--main">
       <div class="card__head">
         <div>
-          <h2 class="card__title">Top Application Breakdown</h2>
-          <p class="card__subtitle" id="appsChartSub">Aggregated nDPI protocol usage</p>
+          <h2 class="card__title" id="liveDeviceTableTitle">Live Device Activity</h2>
+          <p class="card__subtitle">Instantaneous device activity from the latest poll. Zero historical clutter. <strong>Click any row for details or on-demand L7 inspection.</strong></p>
+        </div>
+        <div class="table-controls">
+          <div class="search-box">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="liveHostSearch" placeholder="Search IP, name, MAC..." />
+          </div>
+          <select id="liveSortBy" class="select-box">
+            <option value="bps">Sort: Highest Bandwidth</option>
+            <option value="bytes">Sort: Total Session Traffic</option>
+            <option value="duration">Sort: Longest Duration</option>
+            <option value="ip">Sort: IP Address</option>
+          </select>
         </div>
       </div>
-      <div class="chart-wrap">
-        <canvas id="appsChart"></canvas>
+
+      <div class="table-wrap">
+        <table class="hosts-table" id="liveHostsTable">
+          <thead>
+            <tr>
+              <th style="width:7%">Status</th>
+              <th style="width:23%">IP &amp; Host / MAC</th>
+              <th style="width:14%">Last Seen</th>
+              <th style="width:18%">Session Traffic ↓↑</th>
+              <th style="width:13%">Current Bandwidth</th>
+              <th style="width:11%">BW %</th>
+              <th style="width:14%;text-align:right">L7 Analysis</th>
+            </tr>
+          </thead>
+          <tbody id="liveHostsBody">
+            <tr><td colspan="7" class="empty-state">Loading live devices…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-footer">
+        <span id="liveHostsCountLabel">Showing 0 active devices</span>
+        <span class="table-hint">⚡ Real-time snapshot · updates every poll cycle</span>
       </div>
     </section>
+
   </div>
 
-  <!-- Alerts Feed -->
-  <section class="card">
-    <div class="card__head">
-      <div>
-        <h2 class="card__title">Security &amp; Traffic Alert Log</h2>
-        <p class="card__subtitle">Persistent log of events and threshold crossings</p>
+  <!-- ======================================================================= -->
+  <!-- VIEW 2: 📊 HISTORICAL ANALYTICS & REPORTS                              -->
+  <!-- ======================================================================= -->
+  <div id="historyView" class="view-pane" style="display:none">
+
+    <!-- Historical Control Bar (Time Range + Export) -->
+    <div class="history-toolbar">
+      <div class="history-toolbar__left">
+        <span class="history-toolbar__label">Analysis Window:</span>
+        <div class="range-selector" id="historyRangeToggle">
+          <button data-hours="1"   class="range-btn">1h</button>
+          <button data-hours="6"   class="range-btn">6h</button>
+          <button data-hours="24"  class="range-btn active">24h</button>
+          <button data-hours="168" class="range-btn">7d</button>
+          <button data-hours="720" class="range-btn">30d</button>
+        </div>
+      </div>
+      <div class="history-toolbar__right">
+        <button id="exportCsvBtn" class="action-btn" title="Export current historical table to CSV">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          <span>Export CSV</span>
+        </button>
       </div>
     </div>
-    <div class="alerts-container">
-      <ul class="alert-list" id="alertsList">
-        <li class="empty-state">No alerts recorded in this timeframe.</li>
-      </ul>
+
+    <!-- Historical KPI Metrics — 4 cards -->
+    <section class="kpi-grid kpi-grid--4">
+      <div class="kpi-card">
+        <div class="kpi-card__header">
+          <span class="kpi-title">Peak Download</span>
+          <span class="kpi-icon kpi-icon--down">↓</span>
+        </div>
+        <div class="kpi-value" id="kpiHistPeakDown">—</div>
+        <div class="kpi-sub" id="kpiHistPeakDownSub">In selected window</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-card__header">
+          <span class="kpi-title">Peak Upload</span>
+          <span class="kpi-icon kpi-icon--up">↑</span>
+        </div>
+        <div class="kpi-value" id="kpiHistPeakUp">—</div>
+        <div class="kpi-sub" id="kpiHistPeakUpSub">In selected window</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-card__header">
+          <span class="kpi-title">Total Volume Transferred</span>
+          <span class="kpi-icon" style="background:rgba(6,182,212,0.12);color:#06b6d4">💾</span>
+        </div>
+        <div class="kpi-value" id="kpiHistTotalVol">—</div>
+        <div class="kpi-sub" id="kpiHistTotalVolSub">Across all devices</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-card__header">
+          <span class="kpi-title">Top Dominant Application</span>
+          <span class="kpi-icon kpi-icon--app">★</span>
+        </div>
+        <div class="kpi-value" id="kpiHistTopApp">—</div>
+        <div class="kpi-sub" id="kpiHistTopAppBytes">—</div>
+      </div>
+    </section>
+
+    <!-- Charts Row -->
+    <div class="charts-row">
+      <section class="card chart-card">
+        <div class="card__head">
+          <div>
+            <h2 class="card__title" id="throughputChartTitle">VLAN Bandwidth Timeline</h2>
+            <p class="card__subtitle" id="trafficChartSub">Download / upload throughput over time</p>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="throughputChart"></canvas>
+        </div>
+      </section>
+
+      <section class="card chart-card">
+        <div class="card__head">
+          <div>
+            <h2 class="card__title">Top Application Breakdown</h2>
+            <p class="card__subtitle" id="appsChartSub">Aggregated nDPI protocol usage</p>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="appsChart"></canvas>
+        </div>
+      </section>
     </div>
-  </section>
+
+    <!-- Historical Top Talkers Table -->
+    <section class="card card--main">
+      <div class="card__head">
+        <div>
+          <h2 class="card__title" id="historyDeviceTableTitle">Cumulative Device Activity (Top Talkers)</h2>
+          <p class="card__subtitle">Aggregated traffic volume and applications accessed over the selected timeframe.</p>
+        </div>
+        <div class="table-controls">
+          <div class="search-box">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="historyHostSearch" placeholder="Search IP, name, MAC..." />
+          </div>
+          <select id="historyAppFilter" class="select-box">
+            <option value="">All Applications</option>
+          </select>
+          <select id="historySortBy" class="select-box">
+            <option value="bytes">Sort: Total Traffic</option>
+            <option value="sent">Sort: Highest Upload</option>
+            <option value="rcvd">Sort: Highest Download</option>
+            <option value="duration">Sort: Longest Duration</option>
+            <option value="ip">Sort: IP Address</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="hosts-table" id="historyHostsTable">
+          <thead>
+            <tr>
+              <th style="width:20%">IP &amp; Host / MAC</th>
+              <th style="width:13%">Activity Window</th>
+              <th style="width:28%">Applications Accessed</th>
+              <th style="width:16%">Total Volume (↓ / ↑)</th>
+              <th style="width:11%">Peak Speed</th>
+              <th style="width:12%">Flows</th>
+            </tr>
+          </thead>
+          <tbody id="historyHostsBody">
+            <tr><td colspan="6" class="empty-state">Loading historical records…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-footer">
+        <span id="historyHostsCountLabel">Showing 0 recorded devices</span>
+        <span class="table-hint">💡 Click any host to inspect full historical timeline</span>
+      </div>
+    </section>
+
+    <!-- Alerts Feed -->
+    <section class="card">
+      <div class="card__head">
+        <div>
+          <h2 class="card__title">Security &amp; Traffic Alert Log</h2>
+          <p class="card__subtitle">Persistent log of events and threshold crossings</p>
+        </div>
+      </div>
+      <div class="alerts-container">
+        <ul class="alert-list" id="alertsList">
+          <li class="empty-state">No alerts recorded in this timeframe.</li>
+        </ul>
+      </div>
+    </section>
+
+  </div>
 
 </div>
 

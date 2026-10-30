@@ -1,17 +1,22 @@
 /**
  * TMG Network Monitor Dashboard — Multi-VLAN Edition
- * Grafana-style dark analytics — real-time device activity, engagement tracking
+ * Dual View Architecture:
+ *   1. 📡 Live Monitor (Real-time snapshot, instant bandwidth, zero stale apps)
+ *   2. 📊 Historical Analytics (Time-window trends, top talkers, apps breakdown, CSV export)
  */
 
 const API_BASE = "";
 
 // ── State ────────────────────────────────────────────────────────────────────
+let currentView     = "live"; // "live" | "history"
 let currentHours    = 24;
 let hostDrawerHours = 24;
 let activeHostIp    = null;
-let allHosts        = [];
+
+let liveHosts       = [];
+let historyHosts    = [];
 let aliases         = {};
-let availableApps   = new Set();
+let availableHistApps = new Set();
 let isRefreshing    = false;
 
 // VLAN state
@@ -99,18 +104,9 @@ function deviceStatus(h) {
   const ageS = h.latest_poll_ts
     ? Math.floor(Date.now() / 1000) - h.latest_poll_ts
     : 9999;
-  if (bps > 1000)  return "active";
-  if (ageS < 120)  return "idle";
+  if (bps > 1000) return "active";
+  if (ageS < 300) return "idle";
   return "offline";
-}
-
-// ── App engagement badge ──────────────────────────────────────────────────────
-function engagementMark(sent, rcvd) {
-  const s = Number(sent) || 0;
-  const r = Number(rcvd) || 0;
-  if (r > 1_000_000)       return '<span style="color:#10b981;font-size:8px;margin-right:2px" title="Actively receiving data">●</span>';
-  if (r === 0 && s > 5000) return '<span style="color:#64748b;font-size:8px;margin-right:2px" title="No data received — possibly blocked">✕</span>';
-  return "";
 }
 
 // ── Live clock ────────────────────────────────────────────────────────────────
@@ -139,12 +135,10 @@ function vlanSubnet() {
   return v ? v.subnet : `192.168.${activeVlanId}.0/24`;
 }
 
-/** Build the ?vlan= query param string */
 function vlanQS() {
   return activeVlanId !== null ? `&vlan=${activeVlanId}` : "";
 }
 
-/** Filter a host list to only the active VLAN (or all if none selected). */
 function filterToVlan(hosts) {
   if (activeVlanId === null) return hosts;
   const prefix = `192.168.${activeVlanId}.`;
@@ -153,41 +147,38 @@ function filterToVlan(hosts) {
   );
 }
 
-// ── Update dynamic labels based on active VLAN ────────────────────────────────
+// ── Dynamic Labels ────────────────────────────────────────────────────────────
 function updateVlanLabels() {
-  const v    = getActiveVlan();
-  const label = vlanLabel();
+  const v      = getActiveVlan();
+  const label  = vlanLabel();
   const subnet = vlanSubnet();
 
-  // Header badge
   const badge = document.getElementById("headerVlanBadge");
   if (badge) badge.textContent = activeVlanId !== null
     ? `VLAN ${v?.id ?? activeVlanId} · ${subnet ?? ""}`
     : "All VLANs";
 
-  // Device table title
-  const tableTitle = document.getElementById("deviceTableTitle");
-  if (tableTitle) tableTitle.textContent = `${label} — Live Device Activity`;
+  const liveTitle = document.getElementById("liveDeviceTableTitle");
+  if (liveTitle) liveTitle.textContent = `${label} — Live Device Activity`;
 
-  // Throughput chart title
+  const histTitle = document.getElementById("historyDeviceTableTitle");
+  if (histTitle) histTitle.textContent = `${label} — Cumulative Device Activity (Top Talkers)`;
+
   const chartTitle = document.getElementById("throughputChartTitle");
   if (chartTitle) chartTitle.textContent = `${label} Bandwidth Timeline`;
 
-  // Apps chart subtitle
   const appsSub = document.getElementById("appsChartSub");
   if (appsSub) appsSub.textContent = `Aggregated nDPI protocol usage${subnet ? ` · ${subnet}` : ""}`;
 
-  // Footer
   const footer = document.getElementById("footerText");
   if (footer) footer.textContent = `TMG Network Monitor · ${label} · Powered by ntopng REST API v2 · Persistent local history`;
 }
 
-// ── VLAN tab rendering ────────────────────────────────────────────────────────
+// ── VLAN Tabs rendering ───────────────────────────────────────────────────────
 function renderVlanTabs() {
   const container = document.getElementById("vlanTabs");
   if (!container) return;
 
-  // "ALL" tab
   const allTab = document.createElement("button");
   allTab.className = `vlan-tab vlan-tab--all${activeVlanId === null ? " active" : ""}`;
   allTab.innerHTML = `<span class="vlan-tab__id">ALL</span><span class="vlan-tab__name">All VLANs</span>`;
@@ -211,7 +202,32 @@ function selectVlan(vlanId) {
   refreshAll();
 }
 
-// ── Chart base options ────────────────────────────────────────────────────────
+// ── View Switcher (Live vs Historical) ────────────────────────────────────────
+function switchView(viewName) {
+  if (currentView === viewName) return;
+  currentView = viewName;
+
+  const btnLive    = document.getElementById("btnViewLive");
+  const btnHistory = document.getElementById("btnViewHistory");
+  const viewLive   = document.getElementById("liveView");
+  const viewHist   = document.getElementById("historyView");
+
+  if (viewName === "live") {
+    btnLive?.classList.add("active");
+    btnHistory?.classList.remove("active");
+    if (viewLive) viewLive.style.display = "block";
+    if (viewHist) viewHist.style.display = "none";
+    refreshLive();
+  } else {
+    btnHistory?.classList.add("active");
+    btnLive?.classList.remove("active");
+    if (viewLive) viewLive.style.display = "none";
+    if (viewHist) viewHist.style.display = "block";
+    refreshHistory();
+  }
+}
+
+// ── Charts Setup ──────────────────────────────────────────────────────────────
 function baseChartOptions() {
   return {
     responsive:          true,
@@ -239,7 +255,6 @@ function baseChartOptions() {
   };
 }
 
-// ── Charts ────────────────────────────────────────────────────────────────────
 function initCharts() {
   throughputChart = new Chart(document.getElementById("throughputChart").getContext("2d"), {
     type:"line",
@@ -287,9 +302,8 @@ function initCharts() {
   });
 }
 
-// ── Data fetchers ─────────────────────────────────────────────────────────────
+// ── Data Fetchers ─────────────────────────────────────────────────────────────
 
-/** Fetch VLAN config from server and build tabs (called once on startup). */
 async function fetchVlans() {
   try {
     const data = await apiGet("/api/vlans");
@@ -318,13 +332,13 @@ async function fetchStatus() {
       if (age > s.pollIntervalSeconds * 3) {
         liveDot.classList.add("live-pulse--stale");
         liveText.textContent   = "STALE";
-        statusLine.textContent = `Last poll ${age}s ago · ${vlanLabel()} · DB: ${s.dbStats?.hostCount || 0} host rows`;
+        statusLine.textContent = `Last poll ${age}s ago · ${vlanLabel()} · ${s.dbStats?.hostCount || 0} host records`;
         if (healthBar) healthBar.style.background = "#f59e0b";
       } else {
         liveDot.classList.remove("live-pulse--stale");
         liveText.textContent   = "LIVE";
         const subnetPart = vlanSubnet() ? ` · Subnet ${vlanSubnet()}` : "";
-        statusLine.textContent = `Monitoring ${vlanLabel()}${subnetPart} · Poll: ${s.pollIntervalSeconds}s · DB: ${s.dbStats?.hostAppCount || 0} app records`;
+        statusLine.textContent = `Monitoring ${vlanLabel()}${subnetPart} · Poll: ${s.pollIntervalSeconds}s`;
         if (healthBar) healthBar.style.background = "linear-gradient(90deg,#10b981,#06b6d4)";
       }
     } else {
@@ -342,103 +356,91 @@ async function fetchAliases() {
   aliases = await apiGet("/api/aliases");
 }
 
-async function fetchHosts() {
-  const raw = await apiGet(`/api/hosts/summary?hours=${currentHours}${vlanQS()}`);
-  // When "All VLANs" mode, the server already returns all; client-side filter only if a specific VLAN selected
-  allHosts = filterToVlan(raw);
-  allHosts.forEach((h) => { if (aliases[h.ip]) h.name = aliases[h.ip]; });
+// ==============================================================================
+// 📡 VIEW 1: LIVE MONITOR REFRESH & RENDERING
+// ==============================================================================
 
-  availableApps.clear();
-  allHosts.forEach((h) => {
-    if (h.top_app) availableApps.add(h.top_app);
-    (h.top_apps || []).forEach((a) => availableApps.add(a.name));
-  });
+async function refreshLive() {
+  try {
+    await Promise.allSettled([fetchStatus(), fetchAliases()]);
+    const raw = await apiGet(`/api/live/hosts?${vlanQS()}`);
+    liveHosts = filterToVlan(raw || []);
+    liveHosts.forEach((h) => { if (aliases[h.ip]) h.name = aliases[h.ip]; });
 
-  const appFilter   = document.getElementById("appFilter");
-  const selectedApp = appFilter.value;
-  appFilter.innerHTML = '<option value="">All Applications</option>';
-  [...availableApps].sort().forEach((app) => {
-    const opt = document.createElement("option");
-    opt.value = app; opt.textContent = app;
-    if (app === selectedApp) opt.selected = true;
-    appFilter.appendChild(opt);
-  });
-
-  renderHostsTable();
-  updateKPIs();
+    updateLiveKPIs();
+    renderLiveHostsTable();
+  } catch (err) {
+    console.error("refreshLive error:", err);
+  }
 }
 
-function renderHostsTable() {
-  const searchTerm  = document.getElementById("hostSearch").value.toLowerCase().trim();
-  const selectedApp = document.getElementById("appFilter").value;
-  const sortBy      = document.getElementById("sortBy").value;
-  const tbody       = document.getElementById("hostsBody");
+function updateLiveKPIs() {
+  const activeCount = liveHosts.filter((h) => deviceStatus(h) === "active").length;
+  const totalBps    = liveHosts.reduce((s, h) => s + (h.bps || 0), 0);
+  const totalSent   = liveHosts.reduce((s, h) => s + (h.bytes_sent || 0), 0);
+  const totalRcvd   = liveHosts.reduce((s, h) => s + (h.bytes_rcvd || 0), 0);
 
-  let filtered = allHosts.filter((h) => {
-    const matchSearch =
-      !searchTerm ||
+  const kpiDown = document.getElementById("kpiLiveDown");
+  const kpiUp   = document.getElementById("kpiLiveUp");
+  const kpiBw   = document.getElementById("kpiLiveTotalBw");
+  const kpiHst  = document.getElementById("kpiLiveHosts");
+
+  if (kpiDown) kpiDown.textContent = fmtBps(totalBps > 0 ? (totalBps * 0.7) : 0);
+  if (kpiUp)   kpiUp.textContent   = fmtBps(totalBps > 0 ? (totalBps * 0.3) : 0);
+  if (kpiBw)   kpiBw.textContent   = fmtBps(totalBps);
+  if (kpiHst)  kpiHst.textContent  = `${activeCount} / ${liveHosts.length}`;
+
+  const kpiBwSub  = document.getElementById("kpiLiveTotalBwSub");
+  const kpiHstSub = document.getElementById("kpiLiveHostsSub");
+  if (kpiBwSub)  kpiBwSub.textContent  = `Session: ↓${fmtBytes(totalRcvd)} ↑${fmtBytes(totalSent)}`;
+  if (kpiHstSub) kpiHstSub.textContent = `${activeCount} actively passing traffic`;
+}
+
+function renderLiveHostsTable() {
+  const searchInput = document.getElementById("liveHostSearch");
+  const sortByInput = document.getElementById("liveSortBy");
+  const tbody       = document.getElementById("liveHostsBody");
+  if (!tbody) return;
+
+  const searchTerm = (searchInput?.value || "").toLowerCase().trim();
+  const sortBy     = sortByInput?.value || "bps";
+
+  let filtered = liveHosts.filter((h) => {
+    return !searchTerm ||
       (h.ip   && h.ip.toLowerCase().includes(searchTerm))   ||
       (h.name && h.name.toLowerCase().includes(searchTerm)) ||
       (h.mac  && h.mac.toLowerCase().includes(searchTerm));
-    const matchApp =
-      !selectedApp ||
-      (h.top_app  && h.top_app.toLowerCase() === selectedApp.toLowerCase()) ||
-      (h.top_apps && h.top_apps.some((a) => a.name.toLowerCase() === selectedApp.toLowerCase()));
-    return matchSearch && matchApp;
   });
 
   filtered.sort((a, b) => {
-    if (sortBy === "bps")      return (b.bps      || 0) - (a.bps      || 0);
-    if (sortBy === "bytes")    return (b.bytes_total  || 0) - (a.bytes_total  || 0);
+    if (sortBy === "bps")      return (b.bps || 0) - (a.bps || 0);
+    if (sortBy === "bytes")    return (b.bytes_total || 0) - (a.bytes_total || 0);
     if (sortBy === "duration") return (b.duration_sec || 0) - (a.duration_sec || 0);
     if (sortBy === "ip")       return (a.ip || "").localeCompare(b.ip || "");
     return 0;
   });
 
-  document.getElementById("hostsCountLabel").textContent =
-    `Showing ${filtered.length} of ${allHosts.length} devices`;
+  const countLabel = document.getElementById("liveHostsCountLabel");
+  if (countLabel) {
+    countLabel.textContent = `Showing ${filtered.length} of ${liveHosts.length} live devices`;
+  }
 
   if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">No hosts match the current search / filter criteria.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">No active devices found in current poll.</td></tr>`;
     return;
   }
 
-  // Compute max bps for bandwidth percentage bar
   const maxBps = Math.max(...filtered.map((h) => h.bps || 0), 1);
 
   tbody.innerHTML = filtered.map((h) => {
     const status  = deviceStatus(h);
     const bwPct   = Math.round(((h.bps || 0) / maxBps) * 100);
 
-    // Determine the host label — prefer alias, then name, then show VLAN name if known
     const vlanInfo = vlansConfig.find((v) => {
       const prefix = `192.168.${v.id}.`;
       return Number(h.vlan) === v.id || (typeof h.ip === "string" && h.ip.startsWith(prefix));
     });
     const vlanTag = vlanInfo ? `<span class="badge badge--vlan" style="font-size:9px;padding:1px 5px;margin-left:4px">VLAN${vlanInfo.id}·${vlanInfo.name}</span>` : "";
-
-    const apps = h.top_apps && h.top_apps.length > 0
-      ? h.top_apps
-      : (h.top_app ? [{ name:h.top_app, bytes:h.bytes_total, sent:h.bytes_sent, rcvd:h.bytes_rcvd }] : []);
-
-    const appChipsHtml = apps.length > 0
-      ? apps.map((app, idx) => {
-          const s    = Number(app.sent) || 0;
-          const r    = Number(app.rcvd) || 0;
-          const mark = engagementMark(s, r);
-          const tooltip = `↑ Sent: ${fmtBytes(s)} | ↓ Rcvd: ${fmtBytes(r)}`;
-          let chipClass, suffix = "";
-          if (r > 1_000_000) {
-            chipClass = "app-chip chip--active";
-          } else if (r === 0 && s > 5000) {
-            chipClass = "app-chip chip--blocked";
-            suffix    = " <span style='font-size:9px;opacity:0.7'>[blocked?]</span>";
-          } else {
-            chipClass = idx === 0 ? "app-chip app-chip--primary" : "app-chip app-chip--secondary";
-          }
-          return `<span class="${chipClass}" title="${tooltip}">${mark}<strong>${app.name}</strong>${app.bytes ? ` <span class="app-chip__bytes">${fmtBytes(app.bytes)}</span>` : ""}${suffix}</span>`;
-        }).join("")
-      : `<span class="app-chip app-chip--other">Active Traffic</span>`;
 
     const rowClass = status === "active" ? "row--active" : "";
 
@@ -458,9 +460,6 @@ function renderHostsTable() {
           <div class="host-sub">Active ${fmtDuration(h.duration_sec)}</div>
         </td>
         <td>
-          <div class="app-chips-container">${appChipsHtml}</div>
-        </td>
-        <td>
           <div class="host-cell">
             <span class="traffic-val">${fmtBytes(h.bytes_total)}</span>
             <span class="host-sub">
@@ -475,6 +474,12 @@ function renderHostsTable() {
           <div class="bw-bar"><div class="bw-bar__fill" style="width:${bwPct}%"></div></div>
           <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);text-align:center">${bwPct}%</div>
         </td>
+        <td style="text-align:right" onclick="event.stopPropagation()">
+          <button class="table-btn--l7" onclick="openHostDrawerAndAnalyze('${h.ip}')" title="Inspect Layer 7 Apps on demand">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            Analyze L7
+          </button>
+        </td>
       </tr>`;
   }).join("");
 
@@ -483,43 +488,176 @@ function renderHostsTable() {
   });
 }
 
-function updateKPIs() {
-  // Active vs total
-  const activeCount = allHosts.filter((h) => deviceStatus(h) === "active").length;
-  document.getElementById("kpiHosts").textContent    = `${activeCount} / ${allHosts.length}`;
-  document.getElementById("kpiHostsSub").textContent = `${activeCount} actively sending data`;
+function openHostDrawerAndAnalyze(ip) {
+  openHostDrawer(ip).then(() => {
+    fetchLiveL7();
+  });
+}
+window.openHostDrawerAndAnalyze = openHostDrawerAndAnalyze;
 
-  // Total VLAN bandwidth
-  const totalBps = allHosts.reduce((s, h) => s + (h.bps || 0), 0);
-  document.getElementById("kpiTotalBw").textContent    = fmtBps(totalBps);
-  document.getElementById("kpiTotalBwSub").textContent = `Across ${allHosts.length} hosts`;
+// ==============================================================================
+// 📊 VIEW 2: HISTORICAL ANALYTICS REFRESH & RENDERING
+// ==============================================================================
 
-  // Top app
+async function refreshHistory() {
+  try {
+    await Promise.allSettled([
+      fetchStatus(),
+      fetchAliases(),
+      fetchHistoryHosts(),
+      fetchThroughputChart(),
+      fetchTopAppsChart(),
+      fetchAlerts(),
+    ]);
+  } catch (err) {
+    console.error("refreshHistory error:", err);
+  }
+}
+
+async function fetchHistoryHosts() {
+  const raw = await apiGet(`/api/history/hosts?hours=${currentHours}${vlanQS()}`);
+  historyHosts = filterToVlan(raw || []);
+  historyHosts.forEach((h) => { if (aliases[h.ip]) h.name = aliases[h.ip]; });
+
+  availableHistApps.clear();
+  historyHosts.forEach((h) => {
+    if (h.top_app) availableHistApps.add(h.top_app);
+    (h.top_apps || []).forEach((a) => availableHistApps.add(a.name));
+  });
+
+  const appFilter   = document.getElementById("historyAppFilter");
+  if (appFilter) {
+    const selectedApp = appFilter.value;
+    appFilter.innerHTML = '<option value="">All Applications</option>';
+    [...availableHistApps].sort().forEach((app) => {
+      const opt = document.createElement("option");
+      opt.value = app; opt.textContent = app;
+      if (app === selectedApp) opt.selected = true;
+      appFilter.appendChild(opt);
+    });
+  }
+
+  updateHistoryKPIs();
+  renderHistoryHostsTable();
+}
+
+function updateHistoryKPIs() {
+  const totalBytes = historyHosts.reduce((s, h) => s + (h.bytes_total || 0), 0);
+  const totalVolEl = document.getElementById("kpiHistTotalVol");
+  if (totalVolEl) totalVolEl.textContent = fmtBytes(totalBytes);
+
   const appCounts = {};
-  allHosts.forEach((h) => {
+  historyHosts.forEach((h) => {
     (h.top_apps || []).forEach((a) => {
       appCounts[a.name] = (appCounts[a.name] || 0) + (a.bytes || 0);
     });
   });
   const sorted = Object.entries(appCounts).sort((a, b) => b[1] - a[1]);
+  const topAppEl     = document.getElementById("kpiHistTopApp");
+  const topAppBytes  = document.getElementById("kpiHistTopAppBytes");
   if (sorted.length > 0) {
-    document.getElementById("kpiTopApp").textContent      = sorted[0][0];
-    document.getElementById("kpiTopAppBytes").textContent = `${fmtBytes(sorted[0][1])} transferred`;
+    if (topAppEl)    topAppEl.textContent    = sorted[0][0];
+    if (topAppBytes) topAppBytes.textContent = `${fmtBytes(sorted[0][1])} recorded`;
   } else {
-    document.getElementById("kpiTopApp").textContent      = "—";
-    document.getElementById("kpiTopAppBytes").textContent = "No app traffic";
+    if (topAppEl)    topAppEl.textContent    = "—";
+    if (topAppBytes) topAppBytes.textContent = "No app records";
+  }
+}
+
+function renderHistoryHostsTable() {
+  const searchInput = document.getElementById("historyHostSearch");
+  const appFilter   = document.getElementById("historyAppFilter");
+  const sortByInput = document.getElementById("historySortBy");
+  const tbody       = document.getElementById("historyHostsBody");
+  if (!tbody) return;
+
+  const searchTerm  = (searchInput?.value || "").toLowerCase().trim();
+  const selectedApp = appFilter?.value || "";
+  const sortBy      = sortByInput?.value || "bytes";
+
+  let filtered = historyHosts.filter((h) => {
+    const matchSearch =
+      !searchTerm ||
+      (h.ip   && h.ip.toLowerCase().includes(searchTerm))   ||
+      (h.name && h.name.toLowerCase().includes(searchTerm)) ||
+      (h.mac  && h.mac.toLowerCase().includes(searchTerm));
+    const matchApp =
+      !selectedApp ||
+      (h.top_app  && h.top_app.toLowerCase() === selectedApp.toLowerCase()) ||
+      (h.top_apps && h.top_apps.some((a) => a.name.toLowerCase() === selectedApp.toLowerCase()));
+    return matchSearch && matchApp;
+  });
+
+  filtered.sort((a, b) => {
+    if (sortBy === "bytes")    return (b.bytes_total || 0) - (a.bytes_total || 0);
+    if (sortBy === "sent")     return (b.bytes_sent  || 0) - (a.bytes_sent  || 0);
+    if (sortBy === "rcvd")     return (b.bytes_rcvd  || 0) - (a.bytes_rcvd  || 0);
+    if (sortBy === "duration") return (b.duration_sec || 0) - (a.duration_sec || 0);
+    if (sortBy === "ip")       return (a.ip || "").localeCompare(b.ip || "");
+    return 0;
+  });
+
+  const countLabel = document.getElementById("historyHostsCountLabel");
+  if (countLabel) {
+    countLabel.textContent = `Showing ${filtered.length} of ${historyHosts.length} recorded devices`;
   }
 
-  // Engagement score
-  let engagedApps = 0, blockedApps = 0;
-  allHosts.forEach((h) => {
-    (h.top_apps || []).forEach((a) => {
-      if ((a.rcvd || 0) > 1_000_000)              engagedApps++;
-      if ((a.rcvd || 0) === 0 && (a.sent || 0) > 5000) blockedApps++;
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty-state">No historical host records match criteria.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map((h) => {
+    const vlanInfo = vlansConfig.find((v) => {
+      const prefix = `192.168.${v.id}.`;
+      return Number(h.vlan) === v.id || (typeof h.ip === "string" && h.ip.startsWith(prefix));
     });
+    const vlanTag = vlanInfo ? `<span class="badge badge--vlan" style="font-size:9px;padding:1px 5px;margin-left:4px">VLAN${vlanInfo.id}·${vlanInfo.name}</span>` : "";
+
+    const apps = h.top_apps && h.top_apps.length > 0
+      ? h.top_apps
+      : (h.top_app ? [{ name:h.top_app, bytes:h.bytes_total }] : []);
+
+    const appChipsHtml = apps.length > 0
+      ? apps.map((app, idx) => {
+          const chipClass = idx === 0 ? "app-chip app-chip--primary" : "app-chip app-chip--secondary";
+          return `<span class="${chipClass}"><strong>${app.name}</strong>${app.bytes ? ` <span class="app-chip__bytes">${fmtBytes(app.bytes)}</span>` : ""}</span>`;
+        }).join("")
+      : `<span class="app-chip app-chip--other">Recorded Activity</span>`;
+
+    return `
+      <tr data-ip="${h.ip}">
+        <td>
+          <div class="host-cell">
+            <span class="host-ip">${h.ip} <span class="arrow">➜</span></span>
+            <span class="host-sub">${h.name && h.name !== h.ip ? h.name : (h.mac || "Network Host")}${activeVlanId === null ? vlanTag : ""}</span>
+          </div>
+        </td>
+        <td>
+          <div style="font-family:var(--font-mono);font-size:12px;color:var(--text-primary)">${fmtDateTime(h.max_ts || h.last_seen)}</div>
+          <div class="host-sub">${h.active_polls || 1} active snapshots</div>
+        </td>
+        <td>
+          <div class="app-chips-container">${appChipsHtml}</div>
+        </td>
+        <td>
+          <div class="host-cell">
+            <span class="traffic-val">${fmtBytes(h.bytes_total)}</span>
+            <span class="host-sub">
+              <span style="color:var(--accent-light)">↓ ${fmtBytes(h.bytes_rcvd)}</span>
+              &nbsp;
+              <span style="color:var(--cyan)">↑ ${fmtBytes(h.bytes_sent)}</span>
+            </span>
+          </div>
+        </td>
+        <td><span class="bps-val">${fmtBps(h.bps)}</span></td>
+        <td><span style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted)">${h.num_flows || "—"}</span></td>
+      </tr>`;
+  }).join("");
+
+  tbody.querySelectorAll("tr[data-ip]").forEach((tr) => {
+    tr.addEventListener("click", () => openHostDrawer(tr.dataset.ip));
   });
-  document.getElementById("kpiEngaged").textContent    = engagedApps;
-  document.getElementById("kpiEngagedSub").textContent = `${blockedApps} possibly blocked`;
 }
 
 async function fetchThroughputChart() {
@@ -529,16 +667,16 @@ async function fetchThroughputChart() {
   throughputChart.data.datasets[1].data = rows.map((r) => r.bps_up);
   throughputChart.update();
 
-  const latest = rows[rows.length - 1];
-  document.getElementById("kpiDown").textContent    = fmtBps(latest?.bps_down);
-  document.getElementById("kpiUp").textContent      = fmtBps(latest?.bps_up);
   let peakDown = 0, peakUp = 0;
   rows.forEach((r) => {
     if (r.bps_down > peakDown) peakDown = r.bps_down;
     if (r.bps_up   > peakUp)   peakUp   = r.bps_up;
   });
-  document.getElementById("kpiDownSub").textContent = `Peak: ${fmtBps(peakDown)}`;
-  document.getElementById("kpiUpSub").textContent   = `Peak: ${fmtBps(peakUp)}`;
+
+  const peakDownEl = document.getElementById("kpiHistPeakDown");
+  const peakUpEl   = document.getElementById("kpiHistPeakUp");
+  if (peakDownEl) peakDownEl.textContent = fmtBps(peakDown);
+  if (peakUpEl)   peakUpEl.textContent   = fmtBps(peakUp);
 }
 
 async function fetchTopAppsChart() {
@@ -551,6 +689,7 @@ async function fetchTopAppsChart() {
 async function fetchAlerts() {
   const alerts = await apiGet(`/api/alerts?hours=168&limit=100`);
   const list   = document.getElementById("alertsList");
+  if (!list) return;
   if (!alerts.length) {
     list.innerHTML = `<li class="empty-state">No alerts recorded in the past 7 days.</li>`;
     return;
@@ -570,7 +709,40 @@ async function fetchAlerts() {
   }).join("");
 }
 
-// ── Host Drawer ───────────────────────────────────────────────────────────────
+// ── CSV Export ────────────────────────────────────────────────────────────────
+function exportHistoryCsv() {
+  if (!historyHosts || historyHosts.length === 0) {
+    alert("No historical records to export.");
+    return;
+  }
+
+  const headers = ["IP Address", "Hostname/Alias", "MAC", "VLAN", "Total Bytes", "Bytes Sent", "Bytes Received", "Peak bps", "Flows", "Last Seen"];
+  const rows = historyHosts.map((h) => [
+    `"${h.ip || ""}"`,
+    `"${(h.name || "").replace(/"/g, '""')}"`,
+    `"${h.mac || ""}"`,
+    `"${h.vlan || ""}"`,
+    h.bytes_total || 0,
+    h.bytes_sent || 0,
+    h.bytes_rcvd || 0,
+    h.bps || 0,
+    h.num_flows || 0,
+    `"${fmtDateTime(h.max_ts || h.last_seen)}"`,
+  ]);
+
+  const csvContent = [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `tmg-network-history-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ── Host Detail Drawer ────────────────────────────────────────────────────────
 async function openHostDrawer(ip) {
   activeHostIp = ip;
   document.getElementById("hostDrawerOverlay").classList.add("open");
@@ -590,7 +762,6 @@ async function refreshHostDetails() {
   const apps     = data.apps     || [];
   const timeline = data.timeline || [];
 
-  // Resolve VLAN name for this host
   const hostVlanId = Number(host.vlan) || activeVlanId;
   const hostVlan   = vlansConfig.find((v) => v.id === hostVlanId);
   const vlanDetail = hostVlan ? `VLAN ${hostVlan.id} · ${hostVlan.name}` : `VLAN ${hostVlanId || "?"}`;
@@ -625,19 +796,10 @@ async function refreshHostDetails() {
       const pct      = Math.min(100, Math.round((a.total_bytes / totalHostBytes) * 100));
       const r        = Number(a.total_bytes_rcvd) || 0;
       const s        = Number(a.total_bytes_sent) || 0;
-      const mark     = engagementMark(s, r);
-      const engaged  = r > 1_000_000
-        ? `<span style="color:#10b981;font-size:10px;margin-left:4px" title="Actively engaged">● Active</span>`
-        : (r === 0 && s > 5000)
-          ? `<span style="color:#64748b;font-size:10px;margin-left:4px" title="No data received">✕ Blocked?</span>`
-          : "";
 
       return `
         <tr>
-          <td>
-            <span class="app-chip app-chip--primary">${mark}<strong>${a.app_name}</strong></span>
-            ${engaged}
-          </td>
+          <td><span class="app-chip app-chip--primary"><strong>${a.app_name}</strong></span></td>
           <td>${fmtDuration(a.duration_sec)}</td>
           <td style="color:var(--cyan)">${fmtBytes(s)}</td>
           <td style="color:var(--accent-light)">${fmtBytes(r)}</td>
@@ -651,7 +813,7 @@ async function refreshHostDetails() {
     }).join("");
   }
 
-  // Timeline chart — download + upload split
+  // Timeline chart
   hostTimelineChart.data.labels           = timeline.map((t) => fmtTime(t.ts));
   hostTimelineChart.data.datasets[0].data = timeline.map((t) => t.bps);
   hostTimelineChart.data.datasets[1].data = timeline.map((t) => {
@@ -674,7 +836,6 @@ async function fetchLiveL7() {
   const btn    = document.getElementById("l7FetchBtn");
   const result = document.getElementById("l7Result");
 
-  // Loading state
   btn.disabled   = true;
   btn.innerHTML  = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" class="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Fetching…`;
   result.className = "l7-result l7-result--loading";
@@ -707,9 +868,7 @@ function renderLiveL7(data) {
   result.className = "l7-result l7-result--loaded";
 
   const rows = apps.map((a, i) => {
-    const color   = APP_COLORS[i % APP_COLORS.length];
-    const sentPct = a.bytes > 0 ? Math.round((a.bytes_sent / a.bytes) * 100) : 0;
-    const rcvdPct = 100 - sentPct;
+    const color = APP_COLORS[i % APP_COLORS.length];
     return `
       <tr>
         <td>
@@ -753,7 +912,6 @@ function renderLiveL7(data) {
     </div>`;
 }
 
-// Reset L7 panel when opening a new host
 function resetL7Panel() {
   const result = document.getElementById("l7Result");
   const btn    = document.getElementById("l7FetchBtn");
@@ -791,15 +949,21 @@ window.renameHost = renameHost;
 
 // ── Event wiring ──────────────────────────────────────────────────────────────
 function wireEvents() {
-  document.querySelectorAll("#globalRangeToggle .range-btn").forEach((btn) => {
+  // View Switcher
+  document.getElementById("btnViewLive")?.addEventListener("click", () => switchView("live"));
+  document.getElementById("btnViewHistory")?.addEventListener("click", () => switchView("history"));
+
+  // History Time Range
+  document.querySelectorAll("#historyRangeToggle .range-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      document.querySelectorAll("#globalRangeToggle .range-btn").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll("#historyRangeToggle .range-btn").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       currentHours = Number(btn.dataset.hours);
-      refreshAll();
+      refreshHistory();
     });
   });
 
+  // Drawer Range
   document.querySelectorAll("#hostRangeToggle .range-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll("#hostRangeToggle .range-btn").forEach((b) => b.classList.remove("active"));
@@ -809,18 +973,32 @@ function wireEvents() {
     });
   });
 
-  document.getElementById("hostSearch")?.addEventListener("input",  renderHostsTable);
-  document.getElementById("appFilter")?.addEventListener("change",  renderHostsTable);
-  document.getElementById("sortBy")?.addEventListener("change",     renderHostsTable);
+  // Live Table Filters
+  document.getElementById("liveHostSearch")?.addEventListener("input", renderLiveHostsTable);
+  document.getElementById("liveSortBy")?.addEventListener("change",    renderLiveHostsTable);
 
+  // History Table Filters
+  document.getElementById("historyHostSearch")?.addEventListener("input",  renderHistoryHostsTable);
+  document.getElementById("historyAppFilter")?.addEventListener("change",  renderHistoryHostsTable);
+  document.getElementById("historySortBy")?.addEventListener("change",     renderHistoryHostsTable);
+
+  // Export CSV
+  document.getElementById("exportCsvBtn")?.addEventListener("click", exportHistoryCsv);
+
+  // Sync / Refresh Button
   document.getElementById("refreshBtn")?.addEventListener("click", async () => {
     const icon = document.getElementById("refreshIcon");
-    icon.style.transform  = "rotate(360deg)";
-    icon.style.transition = "transform 0.6s ease";
+    if (icon) {
+      icon.style.transform  = "rotate(360deg)";
+      icon.style.transition = "transform 0.6s ease";
+    }
     await refreshAll();
-    setTimeout(() => { icon.style.transform = ""; icon.style.transition = ""; }, 600);
+    if (icon) {
+      setTimeout(() => { icon.style.transform = ""; icon.style.transition = ""; }, 600);
+    }
   });
 
+  // Drawer Close
   document.getElementById("drawerCloseBtn")?.addEventListener("click", closeHostDrawer);
   document.getElementById("hostDrawerOverlay")?.addEventListener("click", (e) => {
     if (e.target === document.getElementById("hostDrawerOverlay")) closeHostDrawer();
@@ -828,19 +1006,16 @@ function wireEvents() {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeHostDrawer(); });
 }
 
-// ── Main refresh loop ─────────────────────────────────────────────────────────
+// ── Main refresh coordinator ──────────────────────────────────────────────────
 async function refreshAll() {
   if (isRefreshing) return;
   isRefreshing = true;
   try {
-    await Promise.allSettled([
-      fetchStatus(),
-      fetchAliases(),
-      fetchHosts(),
-      fetchThroughputChart(),
-      fetchTopAppsChart(),
-      fetchAlerts(),
-    ]);
+    if (currentView === "live") {
+      await refreshLive();
+    } else {
+      await refreshHistory();
+    }
     if (activeHostIp) await refreshHostDetails();
   } catch (err) {
     console.error("Refresh error:", err);
@@ -855,7 +1030,7 @@ try {
   wireEvents();
   updateClock();
   setInterval(updateClock, 1000);
-  // Fetch VLAN config first, then start main loop
+
   fetchVlans().then(() => {
     refreshAll();
     setInterval(refreshAll, 15_000);

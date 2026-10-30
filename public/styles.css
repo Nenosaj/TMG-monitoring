@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   --bg: #070d10;
   --bg-subtle: #0b1318;
   --surface: #0f1920;
@@ -445,4 +445,111 @@ body {
 /* Spin animation for fetch button loading icon */
 .spin {
   animation: l7spin 0.7s linear infinite;
+}
+
+/* ── View Switcher (Live vs Historical) ──────────────────────────────────── */
+.view-switcher {
+  display: flex;
+  background: rgba(11, 19, 24, 0.85);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  gap: 3px;
+}
+.view-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+.view-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+.view-btn.active {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-light);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.1);
+}
+.view-btn .view-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: pulse-dot 2s infinite ease-in-out;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+/* ── 4-card KPI Grid ─────────────────────────────────────────────────────── */
+.kpi-grid--4 {
+  grid-template-columns: repeat(4, 1fr) !important;
+}
+@media (max-width: 1024px) {
+  .kpi-grid--4 { grid-template-columns: repeat(2, 1fr) !important; }
+}
+@media (max-width: 600px) {
+  .kpi-grid--4 { grid-template-columns: 1fr !important; }
+}
+
+/* ── History Toolbar ─────────────────────────────────────────────────────── */
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  padding: 10px 16px;
+  background: rgba(15, 25, 32, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.history-toolbar__left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.history-toolbar__label {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* ── Table Action Button (Analyze L7) ────────────────────────────────────── */
+.table-btn--l7 {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--accent-light);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.table-btn--l7:hover {
+  background: rgba(16, 185, 129, 0.22);
+  border-color: rgba(16, 185, 129, 0.5);
+  transform: translateY(-1px);
 }

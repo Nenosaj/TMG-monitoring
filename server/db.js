@@ -196,6 +196,34 @@ function getInterfaceHistory(sinceTs) {
 }
 
 /**
+ * Get purely the live hosts from the most recent poll snapshot.
+ * No historical joining, no old app bloat — represents immediate state.
+ */
+function getLiveHosts(vlans = [70]) {
+  const lastTs = db.prepare("SELECT MAX(ts) AS ts FROM host_snapshots").all()[0]?.ts;
+  if (!lastTs) return [];
+
+  const vlanPlaceholders = vlans.map(() => "?").join(",");
+  const subnetConditions = vlans.map(() => "h.ip LIKE ?").join(" OR ");
+  const subnetPatterns   = vlans.map((v) => `192.168.${v}.%`);
+
+  const query = `
+    SELECT
+      h.ip, h.name, h.mac, h.vlan,
+      h.bytes_sent, h.bytes_rcvd, h.bytes_total,
+      h.bps, h.pps, h.num_flows, h.top_app,
+      h.duration_sec, h.first_seen, h.last_seen,
+      h.ts AS latest_poll_ts
+    FROM host_snapshots h
+    WHERE h.ts = ?
+      AND (h.vlan IN (${vlanPlaceholders}) OR h.vlan = 0 OR (${subnetConditions}))
+    ORDER BY h.bps DESC, h.bytes_total DESC
+  `;
+
+  return db.prepare(query).all(lastTs, ...vlans, ...subnetPatterns);
+}
+
+/**
  * Get the latest host list, optionally filtered to specific VLANs.
  * @param {number}   sinceTs  Unix timestamp lower bound
  * @param {number[]} vlans    Array of VLAN IDs to include (pass all monitored VLANs from server.js)
@@ -377,6 +405,7 @@ module.exports = {
   insertAlerts,
   prune,
   getInterfaceHistory,
+  getLiveHosts,
   getLatestHostsList,
   getHostDetails,
   getTopAppsSince,

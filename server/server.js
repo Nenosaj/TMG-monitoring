@@ -138,14 +138,20 @@ app.post("/api/aliases", (req, res) => {
 });
 
 // ── Hosts ─────────────────────────────────────────────────────────────────
-// ?vlan=70 filters to specific VLAN; omit for all monitored VLANs
-app.get("/api/hosts/summary", (req, res) => {
+// Live hosts: only from the most recent poll snapshot (pure real-time)
+app.get("/api/live/hosts", (req, res) => {
+  const vlan = parseVlanParam(req.query);
+  res.json(db.getLiveHosts(vlan ? [vlan] : VLAN_IDS));
+});
+
+// Historical hosts: aggregated over selected window (for Historical Analytics)
+app.get("/api/history/hosts", (req, res) => {
   const vlan = parseVlanParam(req.query);
   res.json(db.getLatestHostsList(since(req.query.hours || 24), vlan ? [vlan] : VLAN_IDS));
 });
 
-// Legacy alias
-app.get("/api/live/hosts", (req, res) => {
+// Backwards-compatible alias for historical summary
+app.get("/api/hosts/summary", (req, res) => {
   const vlan = parseVlanParam(req.query);
   res.json(db.getLatestHostsList(since(req.query.hours || 24), vlan ? [vlan] : VLAN_IDS));
 });
