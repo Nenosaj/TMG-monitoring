@@ -22,23 +22,24 @@ function subnetPrefixes(vlans) {
  * @param {number}   opts.retentionDays     Data retention (default 30)
  * @param {Function} opts.log               Logger function
  */
-function startPoller({ client, vlans = [70], intervalSeconds = 60, retentionDays = 30, log = console.log }) {
+function startPoller({ client, vlans = [70], intervalSeconds = 120, retentionDays = 30, log = console.log }) {
   let isPolling  = false;
   let _pollCount = 0;
   const prefixes = subnetPrefixes(vlans);
   const vlanSet  = new Set(vlans.map(Number));
 
   // --- Tuning knobs ---
+  // Set to 0 to disable per-host L7 enrichment entirely (saves the most CPU on ntopng/pfSense).
+  // Interface-wide app stats (getInterfaceL7Stats) still run regardless.
+  const MAX_L7_HOSTS = 0;
   // Only enrich hosts actively passing traffic above this threshold (bps)
   const BPS_THRESHOLD_FOR_L7 = 1000;
-  // Hard cap on concurrent L7-enriched hosts per cycle
-  const MAX_L7_HOSTS = 15;
   // Concurrency for per-host L7 calls (lower = gentler on ntopng/pfSense)
   const BATCH_SIZE = 2;
   // Delay (ms) between batches to spread load
   const BATCH_DELAY_MS = 500;
-  // Only fetch alerts every N cycles (e.g. 10 × 60s = every 10 minutes)
-  const ALERT_EVERY_N_CYCLES = 10;
+  // Only fetch alerts every N cycles (e.g. 5 × 120s = every 10 minutes)
+  const ALERT_EVERY_N_CYCLES = 5;
 
   function matchesMonitoredVlan(h) {
     const hVlan = Number(h.vlan);
