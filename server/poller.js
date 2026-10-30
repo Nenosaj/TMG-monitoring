@@ -18,14 +18,27 @@ function subnetPrefixes(vlans) {
  * @param {object}   opts
  * @param {object}   opts.client            ntopng REST client
  * @param {number[]} opts.vlans             Array of VLAN IDs to monitor
- * @param {number}   opts.intervalSeconds   Poll interval (default 30)
+ * @param {number}   opts.intervalSeconds   Poll interval (default 60)
  * @param {number}   opts.retentionDays     Data retention (default 30)
  * @param {Function} opts.log               Logger function
  */
-function startPoller({ client, vlans = [70], intervalSeconds = 30, retentionDays = 30, log = console.log }) {
-  let isPolling = false;
+function startPoller({ client, vlans = [70], intervalSeconds = 60, retentionDays = 30, log = console.log }) {
+  let isPolling  = false;
+  let _pollCount = 0;
   const prefixes = subnetPrefixes(vlans);
   const vlanSet  = new Set(vlans.map(Number));
+
+  // --- Tuning knobs ---
+  // Only enrich hosts actively passing traffic above this threshold (bps)
+  const BPS_THRESHOLD_FOR_L7 = 1000;
+  // Hard cap on concurrent L7-enriched hosts per cycle
+  const MAX_L7_HOSTS = 15;
+  // Concurrency for per-host L7 calls (lower = gentler on ntopng/pfSense)
+  const BATCH_SIZE = 2;
+  // Delay (ms) between batches to spread load
+  const BATCH_DELAY_MS = 500;
+  // Only fetch alerts every N cycles (e.g. 10 × 60s = every 10 minutes)
+  const ALERT_EVERY_N_CYCLES = 10;
 
   function matchesMonitoredVlan(h) {
     const hVlan = Number(h.vlan);
@@ -54,6 +67,7 @@ function startPoller({ client, vlans = [70], intervalSeconds = 30, retentionDays
       return;
     }
     isPolling = true;
+    _pollCount++;
     const ts = nowTs();
 
     try {
@@ -87,18 +101,20 @@ function startPoller({ client, vlans = [70], intervalSeconds = 30, retentionDays
         // Non-fatal
       }
 
-      // 4. Alerts
+      // 4. Alerts — throttled: only fetch every ALERT_EVERY_N_CYCLES cycles
       let alerts = [];
-      try {
-        const rawAlerts = await client.getAlertList();
-        alerts = (rawAlerts || []).map((a) => ({
-          row_id:     a.row_id || a.id,
-          severity:   (a.severity?.label || a.severity || "info").replace(/<[^>]+>/g, "").trim(),
-          alert_name: (a.alert_name || a.title || "Alert").replace(/<[^>]+>/g, "").trim(),
-          description:(a.msg?.description || a.description || a.msg || "").replace(/<[^>]+>/g, "").trim(),
-        }));
-      } catch (e) {
-        // Non-fatal
+      if (_pollCount % ALERT_EVERY_N_CYCLES === 0) {
+        try {
+          const rawAlerts = await client.getAlertList();
+          alerts = (rawAlerts || []).map((a) => ({
+            row_id:     a.row_id || a.id,
+            severity:   (a.severity?.label || a.severity || "info").replace(/<[^>]+>/g, "").trim(),
+            alert_name: (a.alert_name || a.title || "Alert").replace(/<[^>]+>/g, "").trim(),
+            description:(a.msg?.description || a.description || a.msg || "").replace(/<[^>]+>/g, "").trim(),
+          }));
+        } catch (e) {
+          // Non-fatal
+        }
       }
 
       // Insert interface snapshot
@@ -117,23 +133,56 @@ function startPoller({ client, vlans = [70], intervalSeconds = 30, retentionDays
       const hostRows    = [];
       const hostAppRows = [];
 
-      // Query L7 stats in parallel batches of 4 (gentle on ntopng)
-      const BATCH_SIZE = 4;
-      for (let i = 0; i < hosts.length; i += BATCH_SIZE) {
-        const batch = hosts.slice(i, i + BATCH_SIZE);
+      // --- OPTIMIZATION: Only enrich hosts that are actively passing traffic ---
+      // Sort by bps descending and cap at MAX_L7_HOSTS to avoid hammering ntopng
+      const hostsForL7 = hosts
+        .filter(h => (h.thpt?.bps ?? h.throughput_bps ?? 0) > BPS_THRESHOLD_FOR_L7)
+        .sort((a, b) => (b.thpt?.bps ?? b.throughput_bps ?? 0) - (a.thpt?.bps ?? a.throughput_bps ?? 0))
+        .slice(0, MAX_L7_HOSTS);
+
+      const l7Set = new Set(hostsForL7.map(h => h.ip));
+
+      // Build host metric rows for ALL hosts first (no L7 needed for basic stats)
+      for (const h of hosts) {
+        const bytesSent  = h.bytes?.sent  ?? 0;
+        const bytesRcvd  = h.bytes?.recvd ?? h.bytes?.received ?? h.bytes?.rcvd ?? 0;
+        const bytesTotal = h.bytes?.total ?? (bytesSent + bytesRcvd);
+        const bps        = h.thpt?.bps ?? h.throughput_bps ?? 0;
+        const pps        = h.thpt?.pps ?? h.throughput_pps ?? 0;
+        const numFlows   = h.num_flows?.total ?? h.num_flows ?? 0;
+        const hostDuration = (h.last_seen && h.first_seen) ? (h.last_seen - h.first_seen) : 0;
+
+        hostRows.push({
+          ts,
+          ip:          h.ip,
+          name:        h.name || h.ip,
+          mac:         h.mac || "",
+          vlan:        resolveVlan(h),
+          bytes_sent:  bytesSent,
+          bytes_rcvd:  bytesRcvd,
+          bytes_total: bytesTotal,
+          bps,
+          pps,
+          num_flows:   numFlows,
+          top_app:     null,   // filled in below for active hosts
+          duration_sec:hostDuration,
+          first_seen:  h.first_seen ?? h.seen?.first,
+          last_seen:   h.last_seen  ?? h.seen?.last,
+        });
+      }
+
+      // Build a quick lookup map for the hostRows by IP so we can backfill top_app
+      const hostRowByIp = new Map(hostRows.map(r => [r.ip, r]));
+
+      // --- L7 enrichment: batched with delay, only for active hosts ---
+      for (let i = 0; i < hostsForL7.length; i += BATCH_SIZE) {
+        const batch = hostsForL7.slice(i, i + BATCH_SIZE);
         await Promise.all(
           batch.map(async (h) => {
-            let topApp = null;
-            const hostDuration = (h.last_seen && h.first_seen) ? (h.last_seen - h.first_seen) : 0;
-            const resolvedVlan = resolveVlan(h);
-
-            const bytesSent  = h.bytes?.sent  ?? 0;
-            const bytesRcvd  = h.bytes?.recvd ?? h.bytes?.received ?? h.bytes?.rcvd ?? 0;
-            const bytesTotal = h.bytes?.total ?? (bytesSent + bytesRcvd);
-
-            const totalForRatio = bytesSent + bytesRcvd || 1;
-            const sentRatio = bytesSent / totalForRatio;
-            const rcvdRatio = bytesRcvd / totalForRatio;
+            const row          = hostRowByIp.get(h.ip);
+            const totalForRatio = (row.bytes_sent + row.bytes_rcvd) || 1;
+            const sentRatio    = row.bytes_sent / totalForRatio;
+            const rcvdRatio    = row.bytes_rcvd / totalForRatio;
 
             try {
               const l7 = await client.getHostL7Stats(h.ip);
@@ -142,8 +191,8 @@ function startPoller({ client, vlans = [70], intervalSeconds = 30, retentionDays
                   .filter((a) => (a.value ?? 0) > 0)
                   .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
 
-                if (sortedApps.length > 0) {
-                  topApp = sortedApps[0].label || sortedApps[0].name;
+                if (sortedApps.length > 0 && row) {
+                  row.top_app = sortedApps[0].label || sortedApps[0].name;
                 }
 
                 for (const app of l7) {
@@ -156,62 +205,40 @@ function startPoller({ client, vlans = [70], intervalSeconds = 30, retentionDays
 
                   hostAppRows.push({
                     ts,
-                    ip:          h.ip,
-                    vlan:        resolvedVlan,
-                    app_name:    appName,
-                    bytes:       appTotal,
-                    bytes_sent:  appSent,
-                    bytes_rcvd:  appRcvd,
-                    flows:       app.count ?? 0,
-                    duration_sec:app.duration ?? hostDuration,
+                    ip:           h.ip,
+                    vlan:         resolveVlan(h),
+                    app_name:     appName,
+                    bytes:        appTotal,
+                    bytes_sent:   appSent,
+                    bytes_rcvd:   appRcvd,
+                    flows:        app.count ?? 0,
+                    duration_sec: app.duration ?? row.duration_sec,
                   });
                 }
               }
             } catch (e) {
               // Ignore individual host L7 errors
             }
-
-            const bps      = h.thpt?.bps ?? h.throughput_bps ?? 0;
-            const pps      = h.thpt?.pps ?? h.throughput_pps ?? 0;
-            const numFlows = h.num_flows?.total ?? h.num_flows ?? 0;
-
-            hostRows.push({
-              ts,
-              ip:          h.ip,
-              name:        h.name || h.ip,
-              mac:         h.mac || "",
-              vlan:        resolvedVlan,
-              bytes_sent:  bytesSent,
-              bytes_rcvd:  bytesRcvd,
-              bytes_total: bytesTotal,
-              bps,
-              pps,
-              num_flows:   numFlows,
-              top_app:     topApp,
-              duration_sec:hostDuration,
-              first_seen:  h.first_seen ?? h.seen?.first,
-              last_seen:   h.last_seen  ?? h.seen?.last,
-            });
           })
         );
+
+        // Inter-batch delay — spread the load across time
+        if (i + BATCH_SIZE < hostsForL7.length) {
+          await new Promise(r => setTimeout(r, BATCH_DELAY_MS));
+        }
       }
 
       if (hostRows.length)    db.insertHostSnapshots(hostRows);
       if (hostAppRows.length) db.insertHostAppSnapshots(hostAppRows);
 
-      // Interface-wide app breakdown — tagged per monitored VLAN (shared stats)
-      const appRows = [];
-      for (const vlan of vlans) {
-        for (const a of ifaceL7List) {
-          appRows.push({
-            ts,
-            vlan,
-            app_name: a.label || a.name || "Unknown",
-            bytes:    a.value ?? a.count ?? 0,
-            flows:    a.count ?? 0,
-          });
-        }
-      }
+      // Interface-wide app breakdown — insert ONCE (not once per VLAN, since it's shared data)
+      const appRows = ifaceL7List.map(a => ({
+        ts,
+        vlan:     vlans[0], // tag with primary VLAN; it's interface-wide, not per-VLAN
+        app_name: a.label || a.name || "Unknown",
+        bytes:    a.value ?? a.count ?? 0,
+        flows:    a.count ?? 0,
+      }));
       if (appRows.length) db.insertAppSnapshots(appRows);
 
       // Alerts
@@ -235,7 +262,7 @@ function startPoller({ client, vlans = [70], intervalSeconds = 30, retentionDays
         else vlanCounts[r.vlan] = 1;
       }
       const summary = Object.entries(vlanCounts).map(([v, c]) => `VLAN${v}:${c}`).join(" ");
-      log(`[poller] snapshot ok @ ${new Date(ts * 1000).toLocaleTimeString()} — ${hosts.length} hosts (${summary}), ${hostAppRows.length} app rows, ${alertRows.length} alerts`);
+      log(`[poller] snapshot ok @ ${new Date(ts * 1000).toLocaleTimeString()} — ${hosts.length} hosts (${summary}), L7-enriched: ${hostsForL7.length}/${hosts.length}, ${hostAppRows.length} app rows, ${alertRows.length} alerts`);
     } catch (err) {
       const cause  = err.cause;
       const detail = cause
